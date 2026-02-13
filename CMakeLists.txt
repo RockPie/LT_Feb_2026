@@ -12,7 +12,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native")
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -DNDEBUG")
 
 # Set ROOT installation path explicitly
-set(ROOT_DIR "/home/shihai/sw/root/root_install")  # Adjust to your ROOT installation path
+set(ROOT_DIR "/home/fcs01/sw/cern_root/root_install")  # Adjust to your ROOT installation path
 list(APPEND CMAKE_PREFIX_PATH ${ROOT_DIR})
 
 # Add optimization flags and OpenMP

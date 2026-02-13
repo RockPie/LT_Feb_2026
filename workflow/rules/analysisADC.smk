@@ -17,8 +17,11 @@ analysis_adc_samples_focal  = [file.split('/')[-1].replace('.json','') for file 
 qc_all_files_eeemcal = glob.glob("data/DESY_2025/data/beam/Run*.h2g")
 qc_all_files_focal = glob.glob("data/SPS_2024/data/beam/Run*.h2g")
 
+adc_analysis_all_files = glob.glob("dump/102_EventMatch/Run*_matched.root")
+
 qc_all_files_eeemcal = [file.split('/')[-1].replace('.h2g','') for file in qc_all_files_eeemcal]
 qc_all_files_focal = [file.split('/')[-1].replace('.h2g','') for file in qc_all_files_focal]
+adc_analysis_runs = [file.split('/')[-1].replace('_matched.root','') for file in adc_analysis_all_files]
 
 rule Pedestal_EEEMCal:
     input:
@@ -123,6 +126,21 @@ rule AnalysisADC_EEEMCal_all:
 rule AnalysisADC_FoCal_all:
     input:
         expand("dump/203_AnalysisADC/FoCal/{sample}.root", sample=analysis_adc_samples_focal)
+
+rule ADC_Analysis:
+    input:
+        script="build/303_ADC_Analysis",
+        rootfile="dump/102_EventMatch/{run}_matched.root"
+    output:
+        rootfile="dump/303_ADC_Analysis/{run}.root"
+    log:
+        "logs/303_ADC_Analysis/{run}.log"
+    shell:
+        "{input.script} -f {input.rootfile} -o {output.rootfile} &> {log}"
+
+rule ADC_Analysis_all:
+    input:
+        expand("dump/303_ADC_Analysis/{run}.root", run=adc_analysis_runs)
 
 rule TemplateFit_FoCal:
     input:
