@@ -49,11 +49,10 @@ int main(int argc, char **argv) {
         }
     }
 
-    std::vector<int> interested_channels = {};
-    for (int i=38; i<75; i++) {
-        interested_channels.push_back(i);
-    }
+    // std::vector<int> interested_channels = {68, 72, 62, 58, 54, 50, 46, 42, 74, 70, 64, 60, 52, 48, 44, 40, 71, 67 ,63, 59, 55, 49, 43, 39, 73, 69, 65, 61, 53, 51, 45, 41};
+    std::vector<int> interested_but_covered_channels = {54, 58};
 
+    std::vector<int> interested_channels = {50};
     // * --- Create the output file -----------------------------------------------------
     // * --------------------------------------------------------------------------------
     TFile *output_root = new TFile(opts.output_file.c_str(), "RECREATE");
@@ -169,6 +168,17 @@ int main(int argc, char **argv) {
         h2d_toa_channel_sample_list.push_back(h2d_toa_channel_sample);
     }
 
+    std::vector<TH2D*> h2d_adc_toa_correlation_channel_list;
+    for (int i=0; i<FPGA_CHANNEL_NUMBER * fpga_count; i++) {
+        std::string hist_name = "h2d_adc_toa_correlation_channel_" + std::to_string(i);
+        TH2D *h2d_adc_toa_correlation_channel = new TH2D(
+            hist_name.c_str(), (hist_name + ";TOA Value;ADC Value").c_str(),
+            (machine_gun_samples+4)*16, -4.0 * sample_time, (machine_gun_samples) * sample_time,
+            512, 0, 1024);
+        h2d_adc_toa_correlation_channel->SetDirectory(nullptr);
+        h2d_adc_toa_correlation_channel_list.push_back(h2d_adc_toa_correlation_channel);
+    }
+
     // * Th2Ds with ToA
     std::vector<TH2D*> h2d_waveform_adc_list;
     for (int i=0; i<FPGA_CHANNEL_NUMBER * fpga_count; i++) {
@@ -192,6 +202,63 @@ int main(int argc, char **argv) {
         h1d_adc_peak_list.push_back(h1d_adc_peak);
     }
 
+    TH1D *h1d_adc_average = new TH1D(
+        "h1d_adc_average", "Average ADC Value;ADC Value;Counts",
+        256, 0, 1024 * 1.2);
+    h1d_adc_average->SetDirectory(nullptr);
+
+    TH1D *h1d_toa_average = new TH1D(
+        "h1d_toa_average", "Average TOA Value;TOA Value (ns);Counts",
+        256, 0, 1024 * 1.2);
+    h1d_toa_average->SetDirectory(nullptr);
+
+    TH1D *h1d_tot_average = new TH1D(
+        "h1d_tot_average", "Average TOT Value;TOT Value;Counts",
+        256, 0, 4096 * 1.2);
+    h1d_toa_average->SetDirectory(nullptr);
+
+    // * TH1Ds for TOA raw value distribution
+    std::vector<TH1D*> h1d_toa_list;
+    for (int i=0; i<FPGA_CHANNEL_NUMBER * fpga_count; i++) {
+        std::string hist_name = "h1d_toa_channel_" + std::to_string(i);
+        TH1D *h1d_toa = new TH1D(
+            hist_name.c_str(), (hist_name + ";TOA Value;Counts").c_str(),
+            256, 0, 1024);
+        h1d_toa->SetDirectory(nullptr);
+        h1d_toa_list.push_back(h1d_toa);
+    }
+
+    // * TH1Ds for TOT raw value distribution
+    std::vector<TH1D*> h1d_tot_list;
+    for (int i=0; i<FPGA_CHANNEL_NUMBER * fpga_count; i++) {
+        std::string hist_name = "h1d_tot_channel_" + std::to_string(i);
+        TH1D *h1d_tot = new TH1D(
+            hist_name.c_str(), (hist_name + ";TOT Value;Counts").c_str(),
+            256, 0, 4096);
+        h1d_tot->SetDirectory(nullptr);
+        h1d_tot_list.push_back(h1d_tot);
+    }
+
+    std::vector<TH1D*> h1d_toa_sample_index_channel_list;
+    for (int i=0; i<FPGA_CHANNEL_NUMBER * fpga_count; i++) {
+        std::string hist_name = "h1d_toa_sample_index_channel_" + std::to_string(i);
+        TH1D *h1d_toa_sample_index_channel = new TH1D(
+            hist_name.c_str(), (hist_name + ";Sample Index of First ToA;Counts").c_str(),
+            machine_gun_samples, 0, machine_gun_samples);
+        h1d_toa_sample_index_channel->SetDirectory(nullptr);
+        h1d_toa_sample_index_channel_list.push_back(h1d_toa_sample_index_channel);
+    }
+
+    std::vector<TH1D*> h1d_adc_peak_index_channel_list;
+    for (int i=0; i<FPGA_CHANNEL_NUMBER * fpga_count; i++) {
+        std::string hist_name = "h1d_adc_peak_index_channel_" + std::to_string(i);
+        TH1D *h1d_adc_peak_index_channel = new TH1D(
+            hist_name.c_str(), (hist_name + ";Sample Index of ADC Peak;Counts").c_str(),
+            machine_gun_samples, 0, machine_gun_samples);
+        h1d_adc_peak_index_channel->SetDirectory(nullptr);
+        h1d_adc_peak_index_channel_list.push_back(h1d_adc_peak_index_channel);
+    }
+
     for (int _entry = 0; _entry < entry_max; _entry++) {
         input_tree->GetEntry(_entry);
         counter_total_events++;
@@ -199,6 +266,13 @@ int main(int argc, char **argv) {
         if (_entry % 5000 == 0) {
             LOG(INFO) << "Processing entry " << _entry << " / " << entry_max;
         }
+
+        double event_adc_sum = 0.0;
+        double event_adc_count = 0.0;
+        double event_tot_sum = 0.0;
+        double event_tot_count = 0.0;
+        double event_toa_count = 0.0;
+        double event_toa_sum = 0.0;
 
         for (int _fpga_index = 0; _fpga_index < fpga_count; _fpga_index++) {
             auto _fpga_id    = legal_fpga_id_list[_fpga_index];
@@ -302,6 +376,8 @@ int main(int argc, char **argv) {
                 std::vector<int> _adc_samples;
                 int _toa_first = 0;
                 int _toa_first_index = -1;
+                int _tot_first = 0;
+                int _tot_first_index = -1;
 
                 for (int _sample_index = 0; _sample_index < machine_gun_samples; _sample_index++) {
                     const int _val0 = static_cast<int>(_val0_list[_channel_index + _sample_index * FPGA_CHANNEL_NUMBER] & 0x3FFu);
@@ -318,6 +394,10 @@ int main(int argc, char **argv) {
                         _val0_max_index = _sample_index;
                     }
                     if (_val1 > 0){
+                        if (_tot_first == 0) {
+                            _tot_first = _val1;
+                            _tot_first_index = _sample_index;
+                        }
                         if (_val1_max == -1) {
                             _val1_max = _val1;
                             _val1_max_index = _sample_index;
@@ -387,10 +467,44 @@ int main(int argc, char **argv) {
 
                 if (_val0_max >= 0) {
                     double _adc_peak = static_cast<double>(_val0_max - _adc_pedestal);
-                    if (_adc_peak > 0) {
+                    h1d_adc_peak_index_channel_list[hist_index]->Fill(static_cast<double>(_val0_max_index));
+                    if (_adc_peak > 0 && _toa_first_index <= 7 && (_val0_max_index >= 4 && _val0_max_index <= 7)) {
                         h1d_adc_peak_list[hist_index]->Fill(_adc_peak);
+                        // if the channel is interested and not covered, add to the event sum
+                        if (std::find(interested_channels.begin(), interested_channels.end(), _channel_index) != interested_channels.end() &&
+                            std::find(interested_but_covered_channels.begin(), interested_but_covered_channels.end(), _channel_index) == interested_but_covered_channels.end()) {
+                            event_adc_sum += static_cast<double>(_adc_peak);
+                            event_adc_count += 1.0;
+                        }
                     }
                 }
+
+                if (_toa_first > 0) {
+                    h1d_toa_list[hist_index]->Fill(static_cast<double>(_toa_first));
+                    h1d_toa_sample_index_channel_list[hist_index]->Fill(static_cast<double>(_toa_first_index));
+                    // if the channel is interested and not covered, add to the event sum
+                    if (std::find(interested_channels.begin(), interested_channels.end(), _channel_index) != interested_channels.end() &&
+                        std::find(interested_but_covered_channels.begin(), interested_but_covered_channels.end(), _channel_index) == interested_but_covered_channels.end()) {
+                        event_toa_sum += static_cast<double>(_toa_first);
+                        event_toa_count += 1.0;
+                    }
+                }
+
+                if (_tot_first > 0 && _toa_first_index <= 7) {
+                    double _tot_first_decoded = static_cast<double>(_tot_first);
+                    if (_tot_first_decoded > 512) {
+                        _tot_first_decoded -= 512;
+                        _tot_first_decoded *= 8.0;
+                    }
+                    h1d_tot_list[hist_index]->Fill(_tot_first_decoded);
+                    // if the channel is interested and not covered, add to the event sum
+                    if (std::find(interested_channels.begin(), interested_channels.end(), _channel_index) != interested_channels.end() &&
+                        std::find(interested_but_covered_channels.begin(), interested_but_covered_channels.end(), _channel_index) == interested_but_covered_channels.end()) {
+                        event_tot_sum += _tot_first_decoded;
+                        event_tot_count += 1.0;
+                    }
+                }
+
 
                 for (int _sample_index = 0; _sample_index < machine_gun_samples; _sample_index++) {
                     h2d_adc_channel_sample_list[hist_index]->Fill(_sample_index, _adc_samples[_sample_index]);
@@ -401,7 +515,7 @@ int main(int argc, char **argv) {
                     }
                 }
 
-                if (_val0_max >= 0) {
+                if (_val0_max >= 0 && _toa_first_index <= 7) {
                     if (_channel_index < 76) { // for the first ASIC
                         if (_fpga_event_adc_sum_a0 < 0) {
                             _fpga_event_adc_sum_a0 = 0;
@@ -413,10 +527,25 @@ int main(int argc, char **argv) {
                         }
                         _fpga_event_adc_sum_a1 += _val0_max - _adc_pedestal;
                     }
+                    if (_toa_first > 0){
+                        // fill the ADC-TOA correlation histogram
+                        double _toa_first_ns = static_cast<double>(_toa_first) * 0.025; // assuming the ToA unit is 25 ps
+                        _toa_first_ns += static_cast<double>(_toa_first_index) * sample_time - 50.0;
+                        h2d_adc_toa_correlation_channel_list[hist_index]->Fill(_toa_first_ns, _val0_max - _adc_pedestal);
+                    }
                 }
 
             } // end of channel loop
         } // end of fpga loop
+        if (event_adc_count > 0) {
+            h1d_adc_average->Fill(event_adc_sum / event_adc_count);
+        }
+        if (event_toa_count > 0) {
+            h1d_toa_average->Fill(event_toa_sum / event_toa_count);
+        }
+        if (event_tot_count > 0) {
+            h1d_tot_average->Fill(event_tot_sum / event_tot_count);
+        }
     } // end of entry loop
 
     LOG(INFO) << "=== Data Reading Summary ===============================";
@@ -539,6 +668,187 @@ int main(int argc, char **argv) {
     // std::string canvas_peak_png = opts.output_folder + "/adc_peaks_mosaic_" + run_info_str + ".png";
     // canvas_adc_peak->SaveAs(canvas_peak_png.c_str());
     canvas_adc_peak->Close();
+
+    // draw the ADC-ToA correlation Th2Ds in a mosaic layout as well
+    TCanvas *canvas_adc_toa_correlation = new TCanvas("canvas_adc_toa_correlation", "ADC-ToA Correlation for Each Channel", 1200, 800);
+    draw_mosaic_fixed(*canvas_adc_toa_correlation, h2d_adc_toa_correlation_channel_list, topo_wave);
+    canvas_adc_toa_correlation->Modified();
+    canvas_adc_toa_correlation->Update();
+    canvas_adc_toa_correlation->Write();
+    // std::string canvas_adc_toa_correlation_png = opts.output_folder + "/adc_toa_correlation_mosaic_" + run_info_str + ".png";
+    // canvas_adc_toa_correlation->SaveAs(canvas_adc_toa_correlation_png.c_str());
+    canvas_adc_toa_correlation->Close();
+
+    // draw the ToA sample index distribution Th1Ds in a mosaic layout as well
+    TCanvas *canvas_toa_sample_index = new TCanvas("canvas_toa_sample_index", "ToA Sample Index Distribution for Each Channel", 1200, 800);
+    draw_mosaic_fixed(*canvas_toa_sample_index, h1d_toa_sample_index_channel_list, topo_wave);
+    canvas_toa_sample_index->Modified();
+    canvas_toa_sample_index->Update();
+    canvas_toa_sample_index->Write();
+    // std::string canvas_toa_sample_index_png = opts.output_folder + "/toa_sample_index_mosaic_" + run_info_str + ".png";
+    // canvas_toa_sample_index->SaveAs(canvas_toa_sample_index_png.c_str());
+    canvas_toa_sample_index->Close();
+
+    // draw the ADC peak sample index distribution Th1Ds in a mosaic layout as well
+    TCanvas *canvas_adc_peak_sample_index = new TCanvas("canvas_adc_peak_sample_index", "ADC Peak Sample Index Distribution for Each Channel", 1200, 800);
+    draw_mosaic_fixed(*canvas_adc_peak_sample_index, h1d_adc_peak_index_channel_list, topo_wave);
+    canvas_adc_peak_sample_index->Modified();
+    canvas_adc_peak_sample_index->Update();
+    canvas_adc_peak_sample_index->Write();
+    // std::string canvas_adc_peak_sample_index_png = opts.output_folder + "/adc_peak_sample_index_mosaic_" + run_info_str + ".png";
+    // canvas_adc_peak_sample_index->SaveAs(canvas_adc_peak_sample_index_png.c_str());
+    canvas_adc_peak_sample_index->Close();
+
+    // draw the interested channels's ADC peak on top of each other for comparison
+    TCanvas *canvas_adc_peak_overlay = new TCanvas("canvas_adc_peak_overlay", "ADC Peak Overlay for Interested Channels", 1200, 800);
+    canvas_adc_peak_overlay->cd();
+    TLegend *legend = new TLegend(0.7, 0.5, 0.89, 0.89);
+    legend->SetFillStyle(0);
+    legend->SetBorderSize(0);
+
+
+    for (size_t i = 0; i < interested_channels.size(); ++i) {
+        int ch = interested_channels[i];
+        if (ch < 0 || ch >= (int)h1d_adc_peak_list.size()) {
+            LOG(WARNING) << "Interested channel " << ch << " is out of range, skipping.";
+            continue;
+        }
+        h1d_adc_peak_list[ch]->SetLineColor(fpga_colors[i % fpga_colors.size()]);
+        h1d_adc_peak_list[ch]->SetLineWidth(2);
+        // remove the statistics box
+        h1d_adc_peak_list[ch]->SetStats(0);
+        if (i == 0) {
+            gPad->SetLogy();
+            // set axis label
+            h1d_adc_peak_list[ch]->GetXaxis()->SetTitle("ADC Peak Value");
+            h1d_adc_peak_list[ch]->GetYaxis()->SetTitle("Counts");
+            h1d_adc_peak_list[ch]->Draw("HIST");
+        } else {
+            h1d_adc_peak_list[ch]->Draw("HIST SAME");
+        }
+        legend->AddEntry(h1d_adc_peak_list[ch], ("Channel " + std::to_string(ch)).c_str(), "l");
+    }
+    legend->Draw();
+    canvas_adc_peak_overlay->Modified();
+    canvas_adc_peak_overlay->Update();
+    canvas_adc_peak_overlay->Write();
+    std::string canvas_peak_overlay_png = opts.output_folder + "/adc_peaks_overlay_" + run_info_str + ".png";
+    canvas_adc_peak_overlay->SaveAs(canvas_peak_overlay_png.c_str());
+    canvas_adc_peak_overlay->Close();
+
+    // similarly, draw the interested channels's ToA distribution on top of each other for comparison
+    TCanvas *canvas_toa_overlay = new TCanvas("canvas_toa_overlay", "ToA Overlay for Interested Channels", 1200, 800);
+    canvas_toa_overlay->cd();
+    TLegend *legend_toa = new TLegend(0.7, 0.5, 0.89, 0.89);
+    legend_toa->SetFillStyle(0);
+    legend_toa->SetBorderSize(0);
+
+    for (size_t i = 0; i < interested_channels.size(); ++i) {
+        int ch = interested_channels[i];
+        if (ch < 0 || ch >= (int)h1d_toa_list.size()) {
+            LOG(WARNING) << "Interested channel " << ch << " is out of range, skipping.";
+            continue;
+        }
+        h1d_toa_list[ch]->SetLineColor(fpga_colors[i % fpga_colors.size()]);
+        h1d_toa_list[ch]->SetLineWidth(2);
+        // remove the statistics box
+        h1d_toa_list[ch]->SetStats(0);
+        if (i == 0) {
+            gPad->SetLogy();
+            // set axis label
+            h1d_toa_list[ch]->GetXaxis()->SetTitle("ToA Value");
+            h1d_toa_list[ch]->GetYaxis()->SetTitle("Counts");
+            h1d_toa_list[ch]->Draw("HIST");
+        } else {
+            h1d_toa_list[ch]->Draw("HIST SAME");
+        }
+        legend_toa->AddEntry(h1d_toa_list[ch], ("Channel " + std::to_string(ch)).c_str(), "l");
+    }
+    legend_toa->Draw();
+    canvas_toa_overlay->Modified();
+    canvas_toa_overlay->Update();
+    canvas_toa_overlay->Write();
+    std::string canvas_toa_overlay_png = opts.output_folder + "/toa_overlay_" + run_info_str + ".png";
+    canvas_toa_overlay->SaveAs(canvas_toa_overlay_png.c_str());
+    canvas_toa_overlay->Close();
+
+
+    // similarly, draw the interested channels's TOT distribution on top of each other for comparison
+    TCanvas *canvas_tot_overlay = new TCanvas("canvas_tot_overlay", "TOT Overlay for Interested Channels", 1200, 800);
+    canvas_tot_overlay->cd();
+    TLegend *legend_tot = new TLegend(0.7, 0.5, 0.89, 0.89);
+    legend_tot->SetFillStyle(0);
+    legend_tot->SetBorderSize(0);
+
+    for (size_t i = 0; i < interested_channels.size(); ++i) {
+        int ch = interested_channels[i];
+        if (ch < 0 || ch >= (int)h1d_tot_list.size()) {
+            LOG(WARNING) << "Interested channel " << ch << " is out of range, skipping.";
+            continue;
+        }
+        h1d_tot_list[ch]->SetLineColor(fpga_colors[i % fpga_colors.size()]);
+        h1d_tot_list[ch]->SetLineWidth(2);
+        // remove the statistics box
+        h1d_tot_list[ch]->SetStats(0);
+        if (i == 0) {
+            gPad->SetLogy();
+            // set axis label
+            h1d_tot_list[ch]->GetXaxis()->SetTitle("TOT Value");
+            h1d_tot_list[ch]->GetYaxis()->SetTitle("Counts");
+            h1d_tot_list[ch]->Draw("HIST");
+        } else {
+            h1d_tot_list[ch]->Draw("HIST SAME");
+        }
+        legend_tot->AddEntry(h1d_tot_list[ch], ("Channel " + std::to_string(ch)).c_str(), "l");
+    }
+    legend_tot->Draw();
+    canvas_tot_overlay->Modified();
+    canvas_tot_overlay->Update();
+    canvas_tot_overlay->Write();
+    std::string canvas_tot_overlay_png = opts.output_folder + "/tot_overlay_" + run_info_str + ".png";
+    canvas_tot_overlay->SaveAs(canvas_tot_overlay_png.c_str());
+    canvas_tot_overlay->Close();
+
+    // draw the average ADC, ToA, and TOT distribution as well
+    TCanvas *canvas_average = new TCanvas("canvas_average", "Average ADC, ToA, and TOT Distributions", 1200, 800);
+    canvas_average->Divide(1, 3);
+
+    h1d_adc_average->SetLineColor(kRed);
+    h1d_adc_average->SetLineWidth(2);
+    h1d_adc_average->SetStats(0);
+
+    h1d_toa_average->SetLineColor(kBlue);
+    h1d_toa_average->SetLineWidth(2);
+    h1d_toa_average->SetStats(0);
+
+    h1d_tot_average->SetLineColor(kGreen+2);
+    h1d_tot_average->SetLineWidth(2);
+    h1d_tot_average->SetStats(0);
+
+    canvas_average->cd(1);
+    gPad->SetLogy();
+    h1d_adc_average->GetXaxis()->SetTitle("ADC Value");
+    h1d_adc_average->GetYaxis()->SetTitle("Counts");
+    h1d_adc_average->Draw("HIST");
+
+    canvas_average->cd(2);
+    gPad->SetLogy();
+    h1d_toa_average->GetXaxis()->SetTitle("TOA Value (ns)");
+    h1d_toa_average->GetYaxis()->SetTitle("Counts");
+    h1d_toa_average->Draw("HIST");
+
+    canvas_average->cd(3);
+    gPad->SetLogy();
+    h1d_tot_average->GetXaxis()->SetTitle("TOT Value");
+    h1d_tot_average->GetYaxis()->SetTitle("Counts");
+    h1d_tot_average->Draw("HIST");
+
+    canvas_average->Modified();
+    canvas_average->Update();
+    canvas_average->Write();
+    std::string canvas_average_png = opts.output_folder + "/average_distributions_" + run_info_str + ".png";
+    canvas_average->SaveAs(canvas_average_png.c_str());
+    canvas_average->Close();
 
     output_root->cd();
 

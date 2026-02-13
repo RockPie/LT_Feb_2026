@@ -206,7 +206,8 @@ int main(int argc, char **argv){
             entry_matched.erase(entry_matched.begin(), entry_matched.begin() + SWMA_core_size);
         }
     }
-    LOG(INFO) << "Machine gun samples: " << machine_gun_samples;
+    machine_gun_samples = 20;
+    LOG(INFO) << "Machine gun samples (forced): " << machine_gun_samples;
 
     // * --- Create output file ---------------------------------------------------------
     // * --------------------------------------------------------------------------------

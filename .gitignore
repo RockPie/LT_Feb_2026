@@ -2,6 +2,7 @@ build/*
 data/*
 .vscode/*
 dump/*
+dump_pre/*
 temp/*
 .snakemake/*
 workflow/rules/scp_pass.txt

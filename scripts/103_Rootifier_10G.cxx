@@ -238,7 +238,7 @@ int main(int argc, char **argv){
                                 _index_base++;
                             }
                         }
-                        LOG(INFO) << "First header found at index: " << _index_base;
+                        // LOG(INFO) << "First header found at index: " << _index_base;
                         const int frame_size = 192;
                         const int lines_per_event = 4;
                         const int pool_window_size = lines_per_event * 4;
