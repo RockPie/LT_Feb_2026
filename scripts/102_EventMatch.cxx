@@ -1,3 +1,4 @@
+#include "H2GCROC_Common.hxx"
 #include <iostream>
 #include <unistd.h>
 #include "TCanvas.h" 
@@ -24,8 +25,6 @@
 using namespace std;
 
 INITIALIZE_EASYLOGGINGPP
-
-void set_easylogger();
 
 struct LCSResult {
     vector<Long64_t> sequence;
@@ -567,7 +566,7 @@ int main(int argc, char **argv){
 
     Long64_t total_matched_events = 0;
     for (int i = 0; i < matched_length.size(); i++) {
-        total_matched_events += matched_length[i] + 1;
+        total_matched_events += matched_length[i];
     }
 
     if (entry_max == 0) {
@@ -745,19 +744,6 @@ int main(int argc, char **argv){
 
     output_root->Close();
     return 0;
-}
-
-void set_easylogger(){
-    el::Configurations defaultConf;
-    defaultConf.setToDefault();
-    defaultConf.setGlobally(el::ConfigurationType::Format, "%datetime{%H:%m:%s}[%levshort] (%fbase) %msg");
-    defaultConf.set(el::Level::Info,    el::ConfigurationType::Format, 
-        "%datetime{%H:%m:%s}[\033[1;34m%levshort\033[0m] (%fbase) %msg");
-    defaultConf.set(el::Level::Warning, el::ConfigurationType::Format, 
-        "%datetime{%H:%m:%s}[\033[1;33m%levshort\033[0m] (%fbase) %msg");
-    defaultConf.set(el::Level::Error,   el::ConfigurationType::Format, 
-        "%datetime{%H:%m:%s}[\033[1;31m%levshort\033[0m] (%fbase) %msg");
-    el::Loggers::reconfigureLogger("default", defaultConf);
 }
 
 LCSResult longestMatchingSequenceRec(std::vector<Long64_t> arrays[], int n, int pos0, const vector<int>& pos, int variance, unordered_map<string, LCSResult>& memo) {

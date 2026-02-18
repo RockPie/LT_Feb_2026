@@ -1,3 +1,4 @@
+#include "H2GCROC_Common.hxx"
 #include <iostream>
 #include <unordered_set>
 #include <unistd.h>
@@ -21,8 +22,6 @@
 #define LINE_NUMBER_PER_FPGA  20
 
 INITIALIZE_EASYLOGGINGPP
-
-void set_easylogger();
 
 int main(int argc, char **argv){
 
@@ -268,7 +267,7 @@ int main(int argc, char **argv){
                                         oss << std::setw(2) << static_cast<int>(static_cast<unsigned char>(line_data.at(i))) << " ";
                                     }
                                     line_data_hex = oss.str();
-                                    LOG(WARNING) << "Invalid line found: " << line_data_hex;
+                                    // LOG(WARNING) << "Invalid line found: " << line_data_hex;
                                     _index_base += frame_size;
                                     continue;
                                 }
@@ -284,17 +283,7 @@ int main(int argc, char **argv){
                                 // LOG(WARNING) << "Invalid line found: " << line_data_hex;
                                 // continue;
                             }
-                            // read the header
-                            
-                            // // 64-bit timestamp: byte# 15 to byte# 22
-                            // print byte #4 to byte #22 in hex for debugging
-                            // std::string header_data_hex = "";
-                            // std::ostringstream oss;                            oss << std::hex << std::setfill('0');
-                            // for (int i = 4; i < 24 && i < static_cast<int>(line_data.size()); i++) {
-                            //     oss << std::setw(2) << static_cast<int>(static_cast<unsigned char>(line_data.at(i))) << " ";
-                            // }
-                            // header_data_hex = oss.str();
-                            // LOG(DEBUG) << "Header data: " << header_data_hex;
+
                             constexpr int timestamp_offset = 16;
                             ULong64_t timestamp = 0;
                             if (line_data.size() < static_cast<size_t>(timestamp_offset + 8)) {
@@ -486,17 +475,4 @@ int main(int argc, char **argv){
     
     output_root->Close();
     return 0;
-}
-
-void set_easylogger(){
-    el::Configurations defaultConf;
-    defaultConf.setToDefault();
-    defaultConf.setGlobally(el::ConfigurationType::Format, "%datetime{%H:%m:%s}[%levshort] (%fbase) %msg");
-    defaultConf.set(el::Level::Info,    el::ConfigurationType::Format, 
-        "%datetime{%H:%m:%s}[\033[1;34m%levshort\033[0m] (%fbase) %msg");
-    defaultConf.set(el::Level::Warning, el::ConfigurationType::Format, 
-        "%datetime{%H:%m:%s}[\033[1;33m%levshort\033[0m] (%fbase) %msg");
-    defaultConf.set(el::Level::Error,   el::ConfigurationType::Format, 
-        "%datetime{%H:%m:%s}[\033[1;31m%levshort\033[0m] (%fbase) %msg");
-    el::Loggers::reconfigureLogger("default", defaultConf);
 }

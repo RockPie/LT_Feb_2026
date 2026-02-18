@@ -1,7 +1,131 @@
-include: "rules/compile.smk"
-include: "rules/rootfile.smk"
-include: "rules/analysisPhase.smk"
-# include: "rules/download.smk"
+# include rule file compile.smk
 
-include: "rules/analysisADC.smk"
-include: "rules/analysisToA.smk"
+include: "rules/compile.smk"
+
+
+import os
+from glob import glob
+import re
+
+# Directories
+BUILD_DIR = "build"
+GENERAL_DATA_DIR = "data"
+DUMP_DIR = "dump"
+LOG_DIR = "logs"
+
+# Find all RunXXX.h2g files
+# data_files_eeemcal = glob(os.path.join(EEEMCal_DATA_DIR, "Run*.h2g"))
+# data_files_focal = glob(os.path.join(FoCal_DATA_DIR, "Run*.h2g"))
+data_files_10g = glob(os.path.join(GENERAL_DATA_DIR, "Run*.h2g"))
+
+# Extract RunXXX identifiers
+# run_ids_eeemcal = [re.search(r'Run(\d+)\.h2g$', f).group(1) for f in data_files_eeemcal if re.search(r'Run(\d+)\.h2g$', f)]
+# run_ids_focal = [re.search(r'Run(\d+)\.h2g$', f).group(1) for f in data_files_focal if re.search(r'Run(\d+)\.h2g$', f)]
+run_ids_10g = [re.search(r'Run(\d+)\.h2g$', f).group(1) for f in data_files_10g if re.search(r'Run(\d+)\.h2g$', f)]
+
+
+rule Rootifier_10G:
+    input:
+        BUILD_DIR + "/103_Rootifier_10G",
+        GENERAL_DATA_DIR + "/Run{run_id}.h2g"
+    output:
+        DUMP_DIR + "/103_Rootifier_10G/Run{run_id}_rootified.root"
+    log:
+        LOG_DIR + "/103_Rootifier_10G/Run{run_id}.log"
+    shell:
+        """
+        mkdir -p {LOG_DIR}/103_Rootifier_10G
+        mkdir -p {DUMP_DIR}/103_Rootifier_10G
+        {input[0]} -f {input[1]} -o {output} &> {log}
+        """
+
+rule EventRecon10G:
+    input:
+        BUILD_DIR + "/101_EventRecon",
+        DUMP_DIR + "/103_Rootifier_10G/Run{run_id}_rootified.root"
+    output:
+        DUMP_DIR + "/101_EventRecon/Run{run_id}_recon.root"
+    log:
+        LOG_DIR + "/101_EventRecon/Run{run_id}_recon.log"
+    shell:
+        """
+        mkdir -p {LOG_DIR}
+        mkdir -p {DUMP_DIR}/101_EventRecon
+        {input[0]} -f {input[1]} -o {output} &> {log}
+        """
+
+rule EventMatch:
+    input:
+        BUILD_DIR + "/102_EventMatch",
+        DUMP_DIR + "/101_EventRecon/Run{run_id}_recon.root"
+    output:
+        DUMP_DIR + "/102_EventMatch/Run{run_id}_matched.root"
+    log:
+        LOG_DIR + "/102_EventMatch/Run{run_id}_match.log"
+    shell:
+        """
+        mkdir -p {LOG_DIR}
+        mkdir -p {DUMP_DIR}/102_EventMatch
+        {input[0]} -f {input[1]} -o {output} &> {log}
+        """
+
+def get_adc_analysis_files_for_scan(wildcards):
+    import json
+    json_file = f"config/scan_number_{wildcards.scan_id}.json"
+    with open(json_file, 'r') as f:
+        scan_config = json.load(f)
+    # Extract run numbers from JSON (adjust key names as needed)
+    run_numbers = scan_config.get("runs", scan_config.get("run_numbers", scan_config.get("run_ids", [])))
+    return [f"dump/401_ADC_Analysis/Run{run_id}.root" for run_id in run_numbers]
+
+def get_laser_scan_input_files(wildcards):
+    import json
+    json_file = f"config/laser_scan_{wildcards.scan_id}.json"
+    with open(json_file, 'r') as f:
+        scan_config = json.load(f)
+    scan_data = scan_config.get("scan_data", "")
+    scan_configs = scan_config.get("scan_configs", [])
+    if scan_data != "ADC":
+        return []
+    input_files = []
+    for config_path in scan_configs:
+        match = re.search(r"scan_number_(\d+)\.json$", config_path)
+        if match:
+            scan_id = match.group(1)
+            input_files.append(f"dump/402_ADC_Scan/Scan{scan_id}.root")
+    return input_files
+
+rule ADC_Analysis:
+    input:
+        script="build/401_ADC_Analysis",
+        rootfile="dump/102_EventMatch/Run{run_id}_matched.root"
+    output:
+        rootfile="dump/401_ADC_Analysis/Run{run_id}.root"
+    log:
+        "logs/401_ADC_Analysis/Run{run_id}.log"
+    shell:
+        "{input.script} -f {input.rootfile} -o {output.rootfile} &> {log}"
+
+rule ADC_Scan:
+    input:
+        script="build/402_ADC_Scan",
+        jsonfile="config/scan_number_{scan_id}.json",
+        datafiles=get_adc_analysis_files_for_scan
+    output:
+        rootfile="dump/402_ADC_Scan/Scan{scan_id}.root"
+    log:
+        "logs/402_ADC_Scan/Scan{scan_id}.log"
+    shell:
+        "{input.script} -f {input.jsonfile} -o {output.rootfile} &> {log}"
+
+rule Laser_Scan:
+    input:
+        script="build/403_Laser_Scan",
+        jsonfile="config/laser_scan_{scan_id}.json",
+        datafiles=get_laser_scan_input_files
+    output:
+        rootfile="dump/403_Laser_Scan/LaserScan{scan_id}.root"
+    log:
+        "logs/403_Laser_Scan/LaserScan{scan_id}.log"
+    shell:
+        "{input.script} -f {input.jsonfile} -o {output.rootfile} &> {log}"

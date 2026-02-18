@@ -1,3 +1,4 @@
+#include "H2GCROC_Common.hxx"
 #include <iostream>
 #include <unistd.h>
 #include "TCanvas.h" 
@@ -17,8 +18,6 @@
 #endif
 
 INITIALIZE_EASYLOGGINGPP
-
-void set_easylogger();
 
 
 int main(int argc, char **argv){
@@ -148,7 +147,7 @@ int main(int argc, char **argv){
 
     int SWMA_window_size = 200;
     int SWMA_core_size   = 100;
-    int SWMA_threshold   = 4000;
+    int SWMA_threshold   = 164*21;
 
     std::vector <UShort_t> fpga_id_pool;
     std::vector <ULong64_t> timestamp_pool;
@@ -380,11 +379,12 @@ int main(int argc, char **argv){
             entry_matched.erase(entry_matched.begin(), entry_matched.begin() + SWMA_core_size);
         }
     }
+    double machine_gun_all_events = entries_to_process / (double) machine_gun_samples;
 
     if ((good_machine_gun_events + bad_machine_gun_events) == 0) {
         LOG(ERROR) << "No machine gun events found!";
     } else {
-        LOG(INFO) << "Good machine gun events: " << good_machine_gun_events << " (" << (float)good_machine_gun_events / (good_machine_gun_events + bad_machine_gun_events) * 100 << "%)";
+        LOG(INFO) << "Good machine gun events: " << good_machine_gun_events << " (" << (float)good_machine_gun_events / (machine_gun_all_events) * 100 << "%)"; 
     }
 
     // Read the meta data from the input file
@@ -469,17 +469,4 @@ int main(int argc, char **argv){
 
     output_root->Close();
     return 0;
-}
-
-void set_easylogger(){
-    el::Configurations defaultConf;
-    defaultConf.setToDefault();
-    defaultConf.setGlobally(el::ConfigurationType::Format, "%datetime{%H:%m:%s}[%levshort] (%fbase) %msg");
-    defaultConf.set(el::Level::Info,    el::ConfigurationType::Format, 
-        "%datetime{%H:%m:%s}[\033[1;34m%levshort\033[0m] (%fbase) %msg");
-    defaultConf.set(el::Level::Warning, el::ConfigurationType::Format, 
-        "%datetime{%H:%m:%s}[\033[1;33m%levshort\033[0m] (%fbase) %msg");
-    defaultConf.set(el::Level::Error,   el::ConfigurationType::Format, 
-        "%datetime{%H:%m:%s}[\033[1;31m%levshort\033[0m] (%fbase) %msg");
-    el::Loggers::reconfigureLogger("default", defaultConf);
 }

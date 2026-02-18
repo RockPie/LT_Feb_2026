@@ -1,5 +1,9 @@
 #include "H2GCROC_Common.hxx"
 
+// ============================================================================
+// LOGGING SETUP
+// ============================================================================
+
 void set_easylogger(){
     el::Configurations defaultConf;
     defaultConf.setToDefault();
@@ -12,6 +16,10 @@ void set_easylogger(){
         "%datetime{%H:%m:%s}[\033[1;31m%levshort\033[0m] (%fbase) %msg");
     el::Loggers::reconfigureLogger("default", defaultConf);
 }
+
+// ============================================================================
+// ARGUMENT PARSING
+// ============================================================================
 
 ScriptOptions parse_arguments_single_root(int argc, char **argv, const std::string& version) {
     ScriptOptions opts;
@@ -247,6 +255,10 @@ ScriptOptions parse_arguments_single_root_single_csv(int argc, char **argv, cons
     return opts;
 }
 
+// ============================================================================
+// CHANNEL UTILITIES
+// ============================================================================
+
 int get_valid_fpga_channel(int fpga_channel){
     if (fpga_channel < 0 || fpga_channel >= FPGA_CHANNEL_NUMBER) {
         LOG(ERROR) << "Invalid FPGA channel " << fpga_channel;
@@ -322,6 +334,10 @@ int get_total_fpga_channel(int fpga_channel){
     }
     return -1;
 }
+
+// ============================================================================
+// GLOBAL CHANNEL PAINTER IMPLEMENTATION
+// ============================================================================
 
 GlobalChannelPainter::GlobalChannelPainter(const std::string& mapping_file) {
     std::ifstream ifs(mapping_file);

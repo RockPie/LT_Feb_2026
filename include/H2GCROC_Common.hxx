@@ -1,6 +1,9 @@
 #ifndef COMMON_HPP
 #define COMMON_HPP
 
+// ============================================================================
+// INCLUDES
+// ============================================================================
 #include <iostream>
 #include <unistd.h>
 #include <sys/stat.h>
@@ -28,15 +31,17 @@
 #include "TVirtualFitter.h"
 #include "TPad.h"
 #include "TStyle.h"
-#include "TStyle.h"
+
 #include <ROOT/RDataFrame.hxx>
 #include <ROOT/TThreadExecutor.hxx>
-
 
 #include "easylogging++.h"
 #include "nlohmann/json.hpp"
 #include "argparse/argparse.hpp"
 
+// ============================================================================
+// DEFINES
+// ============================================================================
 #ifndef FPGA_CHANNEL_NUMBER
 #define FPGA_CHANNEL_NUMBER 152
 #endif
@@ -47,7 +52,14 @@
 
 using json = nlohmann::json;
 
+// ============================================================================
+// LOGGING
+// ============================================================================
 void set_easylogger();
+
+// ============================================================================
+// DATA STRUCTURES
+// ============================================================================
 
 struct ScriptOptions {
     std::string input_file;
@@ -65,17 +77,23 @@ struct ScriptOptions {
     std::string fitting_file;
 };
 
+// ============================================================================
+// ARGUMENT PARSING
+// ============================================================================
 ScriptOptions parse_arguments_single_root(int argc, char **argv, const std::string& version = "0.1");
-
 ScriptOptions parse_arguments_single_json(int argc, char **argv, const std::string& version = "0.1");
-
 ScriptOptions parse_arguments_single_root_single_csv(int argc, char **argv, const std::string& version = "0.1");
 
+// ============================================================================
+// CHANNEL UTILITIES
+// ============================================================================
 int get_valid_fpga_channel(int fpga_channel);
 int get_total_fpga_channel(int fpga_channel);
+
 inline int get_unified_fpga_channel(int fpga_id, int fpga_channel){
     return fpga_id * FPGA_CHANNEL_NUMBER + fpga_channel;
 }
+
 inline int get_unified_valid_fpga_channel(int fpga_id, int fpga_channel){
     return fpga_id * FPGA_CHANNEL_NUMBER_VALID + fpga_channel;
 }
@@ -97,6 +115,12 @@ inline double decode_toa_value_ns(UInt_t val2) {
     return part0 * scale0 + part1 * scale1 + part2 * scale2;
 }
 
+// ============================================================================
+// GLOBAL CHANNEL PAINTER
+// ============================================================================
+// ============================================================================
+// GLOBAL CHANNEL PAINTER
+// ============================================================================
 class GlobalChannelPainter {
 public:
     GlobalChannelPainter(const std::string& mapping_file);
@@ -104,6 +128,7 @@ public:
     ~GlobalChannelPainter();
 
     TCanvas* get_canvas() { return painter_canvas; }
+    
     void draw_global_channel_hists2D(std::vector <TH2D*> hists, std::unordered_map <int, int> hists_channel_map, const std::string& hist_name, const std::string& hist_title);
     void draw_global_channel_hists1D(std::vector <TH1D*> hists, std::unordered_map <int, int> hists_channel_map, const std::string& hist_name, const std::string& hist_title);
     void draw_global_channel_hists1D_group(std::vector <std::vector <TH1D*>> hists_list, std::unordered_map <int, int> hists_channel_map, const std::string& hist_name, const std::string& hist_title, std::vector <EColor> colors, std::vector <std::string> legend_labels);
@@ -139,6 +164,10 @@ private:
     std::vector <TCanvas*> sub_canvas_list;
 };
 
+// ============================================================================
+// DRAWING UTILITIES
+// ============================================================================
+
 inline void draw_on_pad(TPad* pad, TObject* obj, bool minimalist_axis, bool th2_logz, TF1* fit_func = nullptr)
 {
     if (!pad || !obj) return;
@@ -149,12 +178,12 @@ inline void draw_on_pad(TPad* pad, TObject* obj, bool minimalist_axis, bool th2_
     pad->SetFrameBorderMode(0);
     pad->SetFillStyle(0);
 
-    // --- TH2* ---
+    // TH2* histograms
     if (obj->InheritsFrom(TH2::Class())) {
         auto* h2 = static_cast<TH2*>(obj);
         h2->SetStats(0);
         pad->SetLogz(th2_logz ? 1 : 0);
-        h2->Draw("COLZ");                 // 先画再调（TH2 轴始终存在，但保持一致风格）
+        h2->Draw("COLZ");
 
         if (minimalist_axis) {
             auto *xa = h2->GetXaxis(), *ya = h2->GetYaxis(), *za = h2->GetZaxis();
@@ -166,12 +195,12 @@ inline void draw_on_pad(TPad* pad, TObject* obj, bool minimalist_axis, bool th2_
         return;
     }
 
-    // --- TH1* ---
+    // TH1* histograms
     if (obj->InheritsFrom(TH1::Class())) {
         auto* h1 = static_cast<TH1*>(obj);
         h1->SetStats(0);
         pad->SetLogz(0);
-        h1->Draw("HIST");                 // 先画再调
+        h1->Draw("HIST");
         if (minimalist_axis) {
             auto *xa = h1->GetXaxis(), *ya = h1->GetYaxis();
             if (xa) { xa->SetLabelSize(0); xa->SetTitleSize(0); xa->SetTickLength(0); }
@@ -185,13 +214,12 @@ inline void draw_on_pad(TPad* pad, TObject* obj, bool minimalist_axis, bool th2_
         return;
     }
 
-    // --- TGraphErrors* / TGraph* ---
+    // TGraphErrors* and TGraph*
     if (obj->InheritsFrom(TGraphErrors::Class()) || obj->InheritsFrom(TGraph::Class())) {
-        auto* gr = static_cast<TGraph*>(obj); // TGraphErrors 也继承自 TGraph
+        auto* gr = static_cast<TGraph*>(obj);
         pad->SetLogz(0);
-        gr->Draw("AP");                  // 一定先画，这一步会生成内部的 fHistogram 和轴
+        gr->Draw("AP");
         if (minimalist_axis) {
-            // 对图的轴要通过 GetHistogram() 再取轴，且可能为空，需判空
             if (auto* hframe = gr->GetHistogram()) {
                 auto *xa = hframe->GetXaxis(), *ya = hframe->GetYaxis();
                 if (xa) { xa->SetLabelSize(0); xa->SetTitleSize(0); xa->SetTickLength(0); }
@@ -202,7 +230,7 @@ inline void draw_on_pad(TPad* pad, TObject* obj, bool minimalist_axis, bool th2_
         return;
     }
 
-    // --- 兜底 ---
+    // Default fallback
     pad->SetLogz(0);
     obj->Draw();
     pad->Modified();
@@ -217,6 +245,9 @@ inline void draw_on_pad(TPad* pad, TObject* obj, TObject* fit_obj, bool minimali
     }
 }
 
+// ============================================================================
+// GRID BUILDER
+// ============================================================================
 
 inline void build_gapless_grid(TCanvas& canvas, int NX, int NY,
                                std::vector<std::vector<TPad*>>& pads)
@@ -224,7 +255,7 @@ inline void build_gapless_grid(TCanvas& canvas, int NX, int NY,
     assert(NX > 0 && NY > 0);
     pads.assign(NY, std::vector<TPad*>(NX, nullptr));
 
-    // 统一外观（注意需要 #include <TStyle.h>）
+    // Setup global style
     gStyle->SetPadBorderMode(0);
     gStyle->SetFrameBorderMode(0);
     gStyle->SetCanvasColor(0);
@@ -258,13 +289,11 @@ inline void build_gapless_grid(TCanvas& canvas, int NX, int NY,
     }
 }
 
-// ============ 拓扑封装（固定顺序） ============
-// 用 chan2pad 把 “(vldb, channel) 的线性索引” 映射到 “pad 的线性索引”。
-// 线性索引定义：
-//   chan_linear = vldb * channels_per_vldb + channel
-//   pad_linear  = row * NX + col      （row-major）
-//
-// 这样 items[i] 就永远画到 pad_linear = chan2pad[i] 的 pad 上。
+    // Mapping structure for placing histograms on canvas pads.
+    // Uses chan2pad LUT to map channel indices to pad positions.
+    // Linear index definitions:
+    //   chan_linear = vldb * channels_per_vldb + channel
+    //   pad_linear  = row * NX + col (row-major)
 struct MosaicTopology {
     int NX{16};
     int NY{12};
@@ -342,7 +371,10 @@ inline void draw_mosaic_fixed(TCanvas& canvas,
     canvas.Update();
 }
 
-// ============ 绘制：严格按拓扑顺序 ============
+// ============================================================================
+// MOSAIC DRAWING FUNCTIONS (OVERLOADS)
+// ============================================================================
+
 inline void draw_mosaic_fixed(TCanvas& canvas,
                               const std::vector<TObject*>& items,
                               const MosaicTopology& topo)
@@ -440,6 +472,30 @@ inline void draw_mosaic_fixed(TCanvas& canvas,
     canvas.Update();
 }
 
+inline void AutoZoomByQuantile(TH1D* h,
+                        double qlow = 0.01,
+                        double qhigh = 0.99,
+                        double expand_frac = 0.10)
+{
+    if (!h || h->GetEntries() == 0) return;
+
+    double probs[2] = {qlow, qhigh};
+    double quantiles[2];
+
+    h->GetQuantiles(2, quantiles, probs);
+
+    double qmin = quantiles[0];
+    double qmax = quantiles[1];
+
+    if (qmax <= qmin) return;
+
+    double width = qmax - qmin;
+    double xmin = qmin - expand_frac * width;
+    double xmax = qmax + expand_frac * width;
+
+    h->GetXaxis()->SetRangeUser(xmin, xmax);
+}
+
 inline void draw_mosaic_fixed(TCanvas& canvas,
                               const std::vector<TH2D*>& h2,
                               const std::vector<TGraph*>& fits,
@@ -507,6 +563,10 @@ inline void draw_mosaic_fixed(TCanvas& canvas,
     for (auto* p : gr) objs.push_back(static_cast<TObject*>(p));
     draw_mosaic_fixed(canvas, objs, topo);
 }
+
+// ============================================================================
+// LUT AND TOPOLOGY INITIALIZATION
+// ============================================================================
 
 inline std::vector<int> build_chan2pad_LUT(
     int vldb_number,
@@ -581,6 +641,55 @@ inline std::vector<int> build_chan2pad_LUT(
         }
     }
     return lut;
+}
+
+// ============================================================================
+// MOSAIC TOPOLOGY SETUP
+// ============================================================================
+
+struct MosaicTopoSetup {
+    MosaicTopology topo_wave;
+    MosaicTopology topo_ped_median;
+};
+
+inline MosaicTopoSetup initialize_mosaic_topology(int fpga_count, const std::string& mapping_json_file, int fpga_channel_number) {
+    MosaicTopoSetup setup;
+    
+    std::ifstream mapping_json_ifs(mapping_json_file);
+    if (!mapping_json_ifs.is_open()) {
+        LOG(ERROR) << "Failed to open mapping JSON file: " << mapping_json_file;
+        throw std::runtime_error("Cannot open mapping JSON file");
+    }
+
+    json mapping_json;
+    mapping_json_ifs >> mapping_json;
+    const auto& sipm_board      = mapping_json.at("SiPM_Board");
+    const auto& board_loc       = mapping_json.at("Board_Loc");
+    const auto& board_rotation  = mapping_json.at("Board_Rotation");
+    const auto& board_flip      = mapping_json.at("Board_Flip");
+
+    const int NX = 16, NY = 4;
+    const int board_cols = 8, board_rows = 4;
+
+    auto chan2pad = build_chan2pad_LUT(
+        fpga_count, fpga_channel_number,
+        NX, NY, board_cols, board_rows,
+        sipm_board, board_loc, board_rotation, board_flip
+    );
+
+    setup.topo_wave.NX = NX;
+    setup.topo_wave.NY = NY;
+    setup.topo_wave.vldb_number = fpga_count;
+    setup.topo_wave.channels_per_vldb = fpga_channel_number;
+    setup.topo_wave.reverse_row = true;
+    setup.topo_wave.minimalist_axis = true;
+    setup.topo_wave.th2_logz = true;
+    setup.topo_wave.chan2pad = chan2pad;
+
+    setup.topo_ped_median = setup.topo_wave;
+    setup.topo_ped_median.th2_logz = true;
+
+    return setup;
 }
 
 #endif // COMMON_HPP

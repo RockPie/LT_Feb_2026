@@ -1,0 +1,20 @@
+{
+    "scan_brief": "ADC values of bias voltage scan",
+    "scan_data": "ADC",
+    "scan_configs":[
+        "config/scan_number_0.json",
+        "config/scan_number_1.json",
+        "config/scan_number_2.json",
+        "config/scan_number_3.json",
+        "config/scan_number_4.json",
+        "config/scan_number_5.json"
+    ],
+    "scan_config_labels":[
+        "45 V",
+        "44 V",
+        "43 V",
+        "47 V",
+        "50 V",
+        "54 V"
+    ]
+}

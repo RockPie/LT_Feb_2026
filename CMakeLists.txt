@@ -11,9 +11,24 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native")
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -DNDEBUG")
 
+# Verify conda is not active
+if(DEFINED ENV{CONDA_PREFIX})
+    message(WARNING "Conda environment detected! This may cause library conflicts.")
+    message(WARNING "Consider deactivating conda before running cmake.")
+endif()
+
 # Set ROOT installation path explicitly
-set(ROOT_DIR "/home/fcs01/sw/cern_root/root_install")  # Adjust to your ROOT installation path
+set(ROOT_DIR "/home/shihai/sw/root/root_install") # Adjust to your ROOT installation path
 list(APPEND CMAKE_PREFIX_PATH ${ROOT_DIR})
+
+# Configure RPATH to only use custom ROOT installation
+set(CMAKE_SKIP_BUILD_RPATH FALSE)
+set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
+set(CMAKE_INSTALL_RPATH_USE_LINK_PATH FALSE)
+set(CMAKE_INSTALL_RPATH "${ROOT_DIR}/lib")
+
+# Add linker flags to prefer custom ROOT
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-rpath,${ROOT_DIR}/lib")
 
 # Add optimization flags and OpenMP
 find_package(OpenMP REQUIRED)
