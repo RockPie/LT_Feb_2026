@@ -1,6 +1,7 @@
 #include "H2GCROC_Common.hxx"
 #include "H2GCROC_Lib.hxx"
 #include "TKey.h"
+#include <regex>
 
 INITIALIZE_EASYLOGGINGPP
 
@@ -41,10 +42,10 @@ int main(int argc, char **argv) {
     LOG(INFO) << "Scan Cf: " << scan_Cf;
     LOG(INFO) << "Scan Cfcomp: " << scan_Cfcomp;
 
-    size_t scan_number_pos = input_scan_json.find("scan_number_");
     std::string scan_info_str = "Scan";
-    if (scan_number_pos != std::string::npos) {
-        scan_info_str += " " + input_scan_json.substr(scan_number_pos + 12, 1);
+    std::smatch scan_match;
+    if (std::regex_search(input_scan_json, scan_match, std::regex("scan_number_(\\d+)"))) {
+        scan_info_str += " " + scan_match[1].str();
     } else {
         scan_info_str += " Unknown";
     }
@@ -63,7 +64,9 @@ int main(int argc, char **argv) {
         auto& run_number = run_numbers[run_number_index];
         auto& laser_intensity = laser_intensities[run_number_index];
         LOG(INFO) << "Run number: " << run_number << ", Laser intensity: " << laser_intensity;
-        std::string input_data_file = data_file_prefix + std::to_string(run_number) + ".root";
+        std::ostringstream run_suffix;
+        run_suffix << std::setw(3) << std::setfill('0') << run_number;
+        std::string input_data_file = data_file_prefix + run_suffix.str() + ".root";
         TFile *input_root = TFile::Open(input_data_file.c_str(), "READ");
         if (!input_root || input_root->IsZombie()) {
             LOG(ERROR) << "Failed to open input data file " << input_data_file;
@@ -190,10 +193,25 @@ int main(int argc, char **argv) {
     }
 
     // draw the th1d in the same canvas for each interested channel
+    const std::vector<int> curve_colors = {
+        TColor::GetColor("#1f77b4"), TColor::GetColor("#ff7f0e"), TColor::GetColor("#2ca02c"),
+        TColor::GetColor("#d62728"), TColor::GetColor("#9467bd"), TColor::GetColor("#8c564b"),
+        TColor::GetColor("#e377c2"), TColor::GetColor("#7f7f7f"), TColor::GetColor("#bcbd22"),
+        TColor::GetColor("#17becf"), TColor::GetColor("#4e79a7"), TColor::GetColor("#f28e2b"),
+        TColor::GetColor("#59a14f"), TColor::GetColor("#e15759"), TColor::GetColor("#b07aa1"),
+        TColor::GetColor("#9c755f"), TColor::GetColor("#edc948"), TColor::GetColor("#76b7b2"),
+        TColor::GetColor("#bab0ac"), TColor::GetColor("#1b9e77"), TColor::GetColor("#d95f02"),
+        TColor::GetColor("#7570b3"), TColor::GetColor("#e7298a"), TColor::GetColor("#66a61e"),
+        TColor::GetColor("#e6ab02"), TColor::GetColor("#a6761d"), TColor::GetColor("#666666")
+    };
     for (size_t channel_index = 0; channel_index < interested_channels.size(); channel_index++) {
         int channel = interested_channels[channel_index];
-        TCanvas *canvas = new TCanvas(("canvas_peak_channel_" + std::to_string(channel)).c_str(), ("Channel " + std::to_string(channel)).c_str(), 800, 600);
+        TCanvas *canvas = new TCanvas(("canvas_peak_channel_" + std::to_string(channel)).c_str(), ("Channel " + std::to_string(channel)).c_str(), 1000, 600);
         canvas->cd();
+        TLegend *legend = new TLegend(0.55, 0.6, 0.89, 0.89);
+        legend->SetFillStyle(0);
+        legend->SetBorderSize(0);
+        legend->SetNColumns(4);
         for (size_t run_number_index = 0; run_number_index < run_numbers.size(); run_number_index++) {
             if (channel_index < channel_histograms.size() && run_number_index < channel_histograms[channel_index].size()) {
                 TH1D *hist = channel_histograms[channel_index][run_number_index];
@@ -217,15 +235,60 @@ int main(int argc, char **argv) {
                 if (hist) {
                     // set x range
                     hist->GetXaxis()->SetRangeUser(0, 1023);
-                    hist->GetYaxis()->SetRangeUser(0, max_y_global * 1.2);
-                    hist->SetLineColor(run_number_index + 1);
+                    hist->GetYaxis()->SetRangeUser(1, max_y_global * 40);
+                    // set ticks divisions
+                    hist->GetXaxis()->SetNdivisions(510);
+                    hist->GetYaxis()->SetNdivisions(510);
+                    // remove title
+                    hist->SetTitle("");
+
+                    // set logy
+                    canvas->SetLogy();
+
+                    int color_index = static_cast<int>(run_number_index % curve_colors.size());
+                    int curve_color = curve_colors[color_index];
+                    hist->SetLineColor(curve_color);
+                    hist->SetLineWidth(2);
                     // Remove all functions from the histogram before drawing to hide fit curves
                     // hist->GetListOfFunctions()->Clear();
-                    hist->Draw(run_number_index == 0 ? "" : "HIST SAME");
+                    hist->Draw(run_number_index == 0 ? "HIST" : "HIST SAME");
+                    if (gaus_fit) {
+                        gaus_fit->SetLineColorAlpha(curve_color, 0.5);
+                         gaus_fit->Draw("SAME");
+                    }
+                    // add bias as legend entrym, keep only two digits for the laser intensity
+                    char legend_label[64];
+                    snprintf(legend_label, sizeof(legend_label), "%.2f a.u.", laser_intensities[run_number_index]);
+                    legend->AddEntry(hist, legend_label, "l");
                 }
             }
         }
+        legend->Draw();
+
+        const double x_text  = 0.13;
+        const double y_start = 0.88;
+        const double y_step  = 0.04;
+        TLatex latex;
+        latex.SetNDC();
+        latex.SetTextAlign(13);
+        latex.SetTextSize(0.04);
+        latex.SetTextFont(62);
+        latex.DrawLatex(x_text, y_start, "Laser test with H2GCROC");
+        latex.SetTextSize(0.03);
+        latex.SetTextFont(42);
+        latex.DrawLatex(x_text, y_start - y_step, scan_brief.c_str());
+        latex.DrawLatex(x_text, y_start - 2 * y_step, ("Channel " + std::to_string(channel)).c_str());
+        latex.DrawLatex(x_text, y_start - 3 * y_step, "CERN, February 2026");
+
         canvas->Write();
+        // save as a seprate pdf file
+        std::string pdf_output_file = opts.output_file;
+        if (pdf_output_file.size() > 5 && pdf_output_file.substr(pdf_output_file.size() - 5) == ".root") {
+            pdf_output_file = pdf_output_file.substr(0, pdf_output_file.size() - 5) + "_channel_" + std::to_string(channel) + ".pdf";
+        } else {
+            pdf_output_file = "channel_" + std::to_string(channel) + ".pdf";
+        }
+        canvas->SaveAs(pdf_output_file.c_str());
         canvas->Close();
     }
 
@@ -241,7 +304,7 @@ int main(int argc, char **argv) {
     // draw the error graph of mean ADC peak vs laser intensity for each channel
     for (size_t channel_index = 0; channel_index < interested_channels.size(); channel_index++) {
         int channel = interested_channels[channel_index];
-        TCanvas *canvas = new TCanvas(("canvas_mean_peak_vs_laser_channel_" + std::to_string(channel)).c_str(), ("Mean ADC Peak vs Laser Intensity - Channel " + std::to_string(channel)).c_str(), 800, 600);
+        TCanvas *canvas = new TCanvas(("canvas_mean_peak_vs_laser_channel_" + std::to_string(channel)).c_str(), ("Mean ADC Peak vs Laser Intensity - Channel " + std::to_string(channel)).c_str(), 1000, 600);
         canvas->cd();
         TGraphErrors *graph = new TGraphErrors(channel_laser_intensity_list.size());
         for (size_t i = 0; i < channel_laser_intensity_list.size(); i++) {
@@ -253,15 +316,37 @@ int main(int argc, char **argv) {
             graph->SetPoint(i, channel_laser_intensity_list[i], channel_adc_peak_mean_list[channel_index][i]);
             graph->SetPointError(i, channel_laser_intensity_error_list[i], channel_adc_peak_sigma_list[channel_index][i]);
         }
-        graph->SetTitle(("Mean ADC Peak vs Laser Intensity - Channel " + std::to_string(channel)).c_str());
+        graph->SetTitle("");
         graph->GetXaxis()->SetTitle("Laser Intensity");
         graph->GetYaxis()->SetTitle("Mean ADC Peak");
         // set axis range
         graph->GetXaxis()->SetRangeUser(0, *std::max_element(channel_laser_intensity_list.begin(), channel_laser_intensity_list.end()) * 1.2);
         graph->GetYaxis()->SetRangeUser(0, *std::max_element(channel_adc_peak_mean_list[channel_index].begin(), channel_adc_peak_mean_list[channel_index].end()) * 1.2);
         graph->SetMarkerStyle(20);
+
         graph->Draw("AP");
+
+        TLatex latex;
+        latex.SetNDC();
+        latex.SetTextAlign(13);
+        latex.SetTextSize(0.04);
+        latex.SetTextFont(62);
+        latex.DrawLatex(0.13, 0.88, "Laser test with H2GCROC");
+        latex.SetTextSize(0.03);
+        latex.SetTextFont(42);
+        latex.DrawLatex(0.13, 0.84, scan_brief.c_str());
+        latex.DrawLatex(0.13, 0.80, ("Channel " + std::to_string(channel)).c_str());
+        latex.DrawLatex(0.13, 0.76, "CERN, February 2026");
+
         canvas->Write();
+        // save as a seprate pdf file
+        std::string pdf_output_file = opts.output_file;
+        if (pdf_output_file.size() > 5 && pdf_output_file.substr(pdf_output_file.size() - 5) == ".root") {
+            pdf_output_file = pdf_output_file.substr(0, pdf_output_file.size() - 5) + "_mean_peak_vs_laser_channel_" + std::to_string(channel) + ".pdf";
+        } else {
+            pdf_output_file = "mean_peak_vs_laser_channel_" + std::to_string(channel) + ".pdf";
+        }
+        canvas->SaveAs(pdf_output_file.c_str());
         canvas->Close();
     }
 

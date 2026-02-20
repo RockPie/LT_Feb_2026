@@ -45,6 +45,7 @@ set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -march=native")
 # Find ROOT with correct version
 find_package(ROOT REQUIRED COMPONENTS
     Core 
+    Graf
     RIO
     Tree
     Gpad    

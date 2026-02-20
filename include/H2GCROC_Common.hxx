@@ -692,4 +692,59 @@ inline MosaicTopoSetup initialize_mosaic_topology(int fpga_count, const std::str
     return setup;
 }
 
-#endif // COMMON_HPP
+struct XSlidingResult {
+  int    xbin1 = -1, xbin2 = -1;
+  double xmin  = 0,  xmax  = 0;
+
+  double meanY = -std::numeric_limits<double>::infinity();
+
+  TH1D*  hY = nullptr;  // caller owns (delete after use)
+};
+
+inline XSlidingResult FindBestXWindowByYMean(
+    const TH2D* h2,
+    int xWinBins,
+    int xStepBins,
+    const char* namePrefix = "projY")
+{
+  XSlidingResult best;
+
+  if (!h2) return best;
+
+  const int nx = h2->GetNbinsX();
+  if (xWinBins < 1) xWinBins = 1;
+  if (xStepBins < 1) xStepBins = 1;
+  if (xWinBins > nx) xWinBins = nx;
+
+  const TAxis* ax = h2->GetXaxis();
+  int counter = 0;
+
+  for (int xb1 = 1; xb1 <= nx - xWinBins + 1; xb1 += xStepBins) {
+    const int xb2 = xb1 + xWinBins - 1;
+
+    TString hname = TString::Format("%s_%d", namePrefix, counter++);
+    TH1D* projY = h2->ProjectionY(hname, xb1, xb2, "e");
+
+    double mean = projY->GetMean();
+
+    if (mean > best.meanY) {
+
+      best.meanY = mean;
+
+      best.xbin1 = xb1;
+      best.xbin2 = xb2;
+      best.xmin  = ax->GetBinLowEdge(xb1);
+      best.xmax  = ax->GetBinUpEdge(xb2);
+
+      if (best.hY) delete best.hY;
+      best.hY = (TH1D*)projY->Clone(TString::Format("%s_best", namePrefix));
+      best.hY->SetDirectory(nullptr);
+    }
+
+    delete projY;
+  }
+
+  return best;
+}
+
+#endif // H2GCROC_COMMON_HXX

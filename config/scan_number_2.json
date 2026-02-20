@@ -1,5 +1,5 @@
 {
-    "scan_brief": "Scan 2: Bias 43V, CC 4, Cf 10fF, Cfcomp 10fF",
+    "scan_brief": "Scan 2: Bias 43V, CC 4, Cf 10, Cfcomp 10",
     "scan_bias": 43,
     "scan_CC": 4,
     "scan_Cf": 10,

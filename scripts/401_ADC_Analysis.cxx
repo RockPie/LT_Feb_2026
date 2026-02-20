@@ -5,64 +5,10 @@
 #include "TH1D.h"
 #include "TAxis.h"
 #include "TString.h"
+#include "TObject.h"
 #include <limits>
 
 INITIALIZE_EASYLOGGINGPP
-
-struct XSlidingResult {
-  int    xbin1 = -1, xbin2 = -1;
-  double xmin  = 0,  xmax  = 0;
-
-  double meanY = -std::numeric_limits<double>::infinity();
-
-  TH1D*  hY = nullptr;  // caller owns (delete after use)
-};
-
-XSlidingResult FindBestXWindowByYMean(
-    const TH2D* h2,
-    int xWinBins,
-    int xStepBins,
-    const char* namePrefix = "projY")
-{
-  XSlidingResult best;
-
-  if (!h2) return best;
-
-  const int nx = h2->GetNbinsX();
-  if (xWinBins < 1) xWinBins = 1;
-  if (xStepBins < 1) xStepBins = 1;
-  if (xWinBins > nx) xWinBins = nx;
-
-  const TAxis* ax = h2->GetXaxis();
-  int counter = 0;
-
-  for (int xb1 = 1; xb1 <= nx - xWinBins + 1; xb1 += xStepBins) {
-    const int xb2 = xb1 + xWinBins - 1;
-
-    TString hname = TString::Format("%s_%d", namePrefix, counter++);
-    TH1D* projY = h2->ProjectionY(hname, xb1, xb2, "e");
-
-    double mean = projY->GetMean();
-
-    if (mean > best.meanY) {
-
-      best.meanY = mean;
-
-      best.xbin1 = xb1;
-      best.xbin2 = xb2;
-      best.xmin  = ax->GetBinLowEdge(xb1);
-      best.xmax  = ax->GetBinUpEdge(xb2);
-
-      if (best.hY) delete best.hY;
-      best.hY = (TH1D*)projY->Clone(TString::Format("%s_best", namePrefix));
-      best.hY->SetDirectory(nullptr);
-    }
-
-    delete projY;
-  }
-
-  return best;
-}
 
 int main(int argc, char **argv) {
     ScriptOptions opts = parse_arguments_single_root(argc, argv, "1.0");
@@ -180,7 +126,7 @@ int main(int argc, char **argv) {
 
     const double adc_hist_min = 0.0;
     const double adc_hist_max = 1024.0;
-    const int adc_hist_bins = 256;
+    const int adc_hist_bins = 1024;
 
     const double toa_peak_window_min = 115.0; // unit: ns
     const double toa_peak_window_max = 125.0; // unit: ns
@@ -510,7 +456,7 @@ int main(int argc, char **argv) {
     const double saturation_ignore_threshold = 0.01; // if the last bin has more than 1% of counts, ignore it in fitting
 
     const double threshold_toa_ratio_valid = 0.2;
-    const int sliding_x_window_bins = 10; // unit: 1.5625 ns
+    const int sliding_x_window_bins = 6; // unit: 1.5625 ns
     const int sliding_x_window_step_bins = 1;
     TDirectory* dir_interested = output_root->mkdir("Interested_Channels");
     dir_interested->cd();
@@ -565,26 +511,65 @@ int main(int argc, char **argv) {
                 if (last_bin_fraction > saturation_threshold) {
                     // Saturation detected
                     fit_mean = 1023.0;
-                    fit_sigma = 1/sqrt(12) * 1.0; // assuming uniform distribution between 1023 and 1024 for the saturated bin
+                    fit_sigma = 1.0 / sqrt(12.0); // assuming uniform distribution between 1023 and 1024 for the saturated bin
                     LOG(WARNING) << "Channel " << _channel << " shows saturation (last bin has " << last_bin_fraction * 100 << "% of counts). Assigning mean=1023, sigma=" << fit_sigma << " and skipping Gaussian fit.";
-                    // create dummy TF1 for legend entry
+                    // Create dummy TF1 with fixed parameters and use Fit with N option (no actual fit, just store)
                     TF1* dummy_fit = new TF1("fit_func", "gaus", 0, 1023);
-                    dummy_fit->FixParameter(0, 1023.0); // amplitude
-                    dummy_fit->FixParameter(1, fit_mean); // mean
-                    dummy_fit->FixParameter(2, fit_sigma); // sigma
-                    sliding_result.hY->Fit(dummy_fit, "RQ", "", 0, 1023); // fit in an arbitrary range to set the parameters
-                    // dummy_fit->SetParameter(1, fit_mean);
-                    // dummy_fit->SetParameter(2, fit_sigma);
-                    // dummy_fit->Draw("same");
+                    dummy_fit->AddToGlobalList(false);
+                    dummy_fit->SetParameter(0, sliding_result.hY->GetMaximum()); // amplitude
+                    dummy_fit->SetParameter(1, fit_mean); // mean = 1023
+                    dummy_fit->SetParameter(2, fit_sigma); // sigma
+                    dummy_fit->FixParameter(0, sliding_result.hY->GetMaximum());
+                    dummy_fit->FixParameter(1, fit_mean);
+                    dummy_fit->FixParameter(2, fit_sigma);
+                    // Add to histogram's function list without fitting
+                    sliding_result.hY->GetListOfFunctions()->Add(dummy_fit);
                     legend->AddEntry(dummy_fit, ("Saturation detected: mean = " + std::to_string(fit_mean) + " ADC, sigma = " + std::to_string(fit_sigma) + " ADC").c_str(), "");
                     // set the last bin to 0 count
                     sliding_result.hY->SetBinContent(last_bin, 0);
                 } else {
-                    // Proceed with Gaussian fit
-                    double hist_mean = sliding_result.hY->GetMean();
+                    // Two-stage Gaussian fit
+                    // double hist_mean = sliding_result.hY->GetMean();
+                    // rebin
+                    sliding_result.hY->Rebin(4); // rebin by a factor of 4 to reduce statistical fluctuation for fitting
+                    // force all the bins under 80 ADC to be 0
+                    for (int bin = 1; bin <= sliding_result.hY->GetNbinsX(); ++bin) {
+                        if (sliding_result.hY->GetXaxis()->GetBinCenter(bin) < 80) {
+                            sliding_result.hY->SetBinContent(bin, 0);
+                        }
+                    }
+                    int max_value_bin = sliding_result.hY->GetMaximumBin();
+                    double hist_mean = sliding_result.hY->GetXaxis()->GetBinCenter(max_value_bin);
                     double hist_rms = sliding_result.hY->GetRMS();
-                    double fit_range_min = hist_mean - 3.0 * hist_rms;
-                    double fit_range_max = hist_mean + 3.0 * hist_rms;
+                    double prefit_range_min = hist_mean - 4.0 * hist_rms;
+                    double prefit_range_max = hist_mean + 4.0 * hist_rms;
+                    if (prefit_range_min < 0) {
+                        prefit_range_min = 0;
+                    }
+                    if (prefit_range_max > 1023) {
+                        prefit_range_max = 1023;
+                    }
+                    
+                    // If last bin has 1-10% of counts, exclude it from fit range
+                    if (last_bin_fraction > saturation_ignore_threshold) {
+                        double last_bin_low_edge = sliding_result.hY->GetXaxis()->GetBinLowEdge(last_bin);
+                        if (prefit_range_max > last_bin_low_edge) {
+                            prefit_range_max = last_bin_low_edge;
+                            LOG(INFO) << "Channel " << _channel << " has " << last_bin_fraction * 100 << "% in last bin. Excluding last bin from fit (max range: " << prefit_range_max << ")";
+                        }
+                    }
+                    
+                    // Stage 1: Pre-fit to get rough parameters
+                    TF1* prefit_func = new TF1("prefit_func", "gaus", prefit_range_min, prefit_range_max);
+                    prefit_func->SetParameters(sliding_result.hY->GetMaximum(), hist_mean, hist_rms);
+                    sliding_result.hY->Fit(prefit_func, "RQN");  // N option: don't store in histogram's function list
+                    double prefit_mean = prefit_func->GetParameter(1);
+                    double prefit_sigma = prefit_func->GetParameter(2);
+                    delete prefit_func;
+                    
+                    // Stage 2: Final fit using pre-fit results
+                    double fit_range_min = prefit_mean - 3.0 * prefit_sigma;
+                    double fit_range_max = prefit_mean + 3.0 * prefit_sigma;
                     if (fit_range_min < 0) {
                         fit_range_min = 0;
                     }
@@ -592,17 +577,10 @@ int main(int argc, char **argv) {
                         fit_range_max = 1023;
                     }
                     
-                    // If last bin has 1-10% of counts, exclude it from fit range
-                    if (last_bin_fraction > saturation_ignore_threshold) {
-                        double last_bin_low_edge = sliding_result.hY->GetXaxis()->GetBinLowEdge(last_bin);
-                        if (fit_range_max > last_bin_low_edge) {
-                            fit_range_max = last_bin_low_edge;
-                            LOG(INFO) << "Channel " << _channel << " has " << last_bin_fraction * 100 << "% in last bin. Excluding last bin from fit (max range: " << fit_range_max << ")";
-                        }
-                    }
-                    
                     TF1* fit_func = new TF1("fit_func", "gaus", fit_range_min, fit_range_max);
-                    fit_func->SetParameters(sliding_result.hY->GetMaximum(), hist_mean, hist_rms);
+                    fit_func->SetParameters(sliding_result.hY->GetMaximum(), prefit_mean, prefit_sigma);
+                    // limit the sigma parameter to be within [0.5*prefit_sigma, 2*prefit_sigma] to avoid unphysical fit results due to remaining statistical fluctuation
+                    fit_func->SetParLimits(2, 0.5 * prefit_sigma, 2.0 * prefit_sigma);
                     sliding_result.hY->Fit(fit_func, "RQ");
                     fit_func->SetLineColorAlpha(kRed, 0.7);
                     fit_func->Draw("same");
@@ -615,6 +593,8 @@ int main(int argc, char **argv) {
                 canvas_sliding->Modified();
                 canvas_sliding->Update();
                 canvas_sliding->Write();
+                // Don't close canvas explicitly - let ROOT handle cleanup when file closes
+                // canvas_sliding->Close();
                 
                 LOG(INFO) << "For channel " << _channel << ", the best ToA window is [" << sliding_result.xmin << ", " << sliding_result.xmax << "] ns with mean ADC " << sliding_result.meanY << ", Gaussian fit mean = " << fit_mean << " ADC, sigma = " << fit_sigma << " ADC";
 
@@ -625,38 +605,74 @@ int main(int argc, char **argv) {
 
             LOG(INFO) << "For channel " << _channel << ", the best ToA window is [" << toa_window_min << ", " << toa_window_max << "] ns with mean ADC " << sliding_result.meanY;
             // draw the 2d histogram of the waveform and highlight the best ToA window
-            auto canvas_waveform = new TCanvas(("canvas_waveform_channel_" + std::to_string(_channel)).c_str(), ("ToA Shifted ADC Waveform for Channel " + std::to_string(_channel)).c_str(), 800, 600);
+            auto canvas_waveform = new TCanvas(("canvas_waveform_channel_" + std::to_string(_channel)).c_str(), ("ToA Shifted ADC Waveform for Channel " + std::to_string(_channel)).c_str(), 1000, 600);
             canvas_waveform->SetLeftMargin(0.12);
             canvas_waveform->SetBottomMargin(0.12);
             canvas_waveform->SetRightMargin(0.15);
             canvas_waveform->SetTopMargin(0.08);
             
             th2d_shifted_waveform->SetStats(kFALSE);
-            th2d_shifted_waveform->SetTitle(("ToA Shifted ADC Waveform for Channel " + std::to_string(_channel) + ";Time [ns];ADC").c_str());
+            th2d_shifted_waveform->SetTitle(";Time [ns];ADC");
+            // set logz
+            canvas_waveform->SetLogz();
+            // set axis ticks
+            th2d_shifted_waveform->GetXaxis()->SetNdivisions(505);
+            th2d_shifted_waveform->GetYaxis()->SetNdivisions(505);
             th2d_shifted_waveform->Draw("colz");
+
+            // Enable and make ticks visible
+            gPad->SetTicks(1, 1);
             
-            // Set axis properties after drawing
+            // Explicitly set tick length so they're actually visible
+            th2d_shifted_waveform->GetXaxis()->SetTickLength(0.03);
+            th2d_shifted_waveform->GetYaxis()->SetTickLength(0.03);
+            th2d_shifted_waveform->GetZaxis()->SetTickLength(0);  // Hide Z-axis ticks on right edge
+
+            // Set divisions and sizes
+            th2d_shifted_waveform->GetXaxis()->SetNdivisions(510);
+            th2d_shifted_waveform->GetYaxis()->SetNdivisions(510);
             th2d_shifted_waveform->GetXaxis()->SetTitleSize(0.045);
             th2d_shifted_waveform->GetXaxis()->SetLabelSize(0.04);
             th2d_shifted_waveform->GetYaxis()->SetTitleSize(0.045);
             th2d_shifted_waveform->GetYaxis()->SetLabelSize(0.04);
             th2d_shifted_waveform->GetZaxis()->SetTitleSize(0.045);
             th2d_shifted_waveform->GetZaxis()->SetLabelSize(0.04);
-            th2d_shifted_waveform->GetXaxis()->SetNdivisions(505);
-            th2d_shifted_waveform->GetYaxis()->SetNdivisions(505);
             
             TLine* line_min = new TLine(toa_window_min, adc_hist_min, toa_window_min, adc_hist_max);
-            line_min->SetLineColor(kRed);
+            line_min->SetLineColor(kRed+2);
             line_min->SetLineWidth(2);
+            // dashed line style for the window boundary
+            line_min->SetLineStyle(2);
             line_min->Draw("same");
             TLine* line_max = new TLine(toa_window_max, adc_hist_min, toa_window_max, adc_hist_max);
-            line_max->SetLineColor(kRed);
+            line_max->SetLineColor(kRed+2);
             line_max->SetLineWidth(2);
+            line_max->SetLineStyle(2);
             line_max->Draw("same");
+
+            // write latex info
+            const double x_text = 0.82;
+            double y_start = 0.89;
+            double y_step = 0.04;
+            TLatex latex;
+            latex.SetNDC();
+            latex.SetTextSize(0.04);
+            latex.SetTextFont(62);
+            latex.SetTextAlign(33);
+            latex.DrawLatex(x_text, y_start, "Laser Test with H2GCROC");
+            latex.SetTextSize(0.03);
+            latex.SetTextFont(42);
+            latex.DrawLatex(x_text, y_start - y_step, ("ADC Waveform Shifted by ToA for Channel " + std::to_string(_channel)).c_str());
+            latex.DrawLatex(x_text, y_start - 2 * y_step, ("Best ToA Window: [" + std::to_string(std::round(toa_window_min * 1000) / 1000).substr(0, 5) + ", " + std::to_string(std::round(toa_window_max * 1000) / 1000).substr(0, 5) + "] ns").c_str());
+            latex.DrawLatex(x_text, y_start - 3 * y_step, "CERN, February 2026");
             
             canvas_waveform->Modified();
             canvas_waveform->Update();
             canvas_waveform->Write();
+            // save as a separte pdf file
+            canvas_waveform->SaveAs((opts.output_file + "_channel_" + std::to_string(_channel) + "_toa_shifted_waveform.pdf").c_str());
+            // Don't close canvas explicitly - let ROOT handle cleanup when file closes
+            // canvas_waveform->Close();
 
         } else {
             LOG(INFO) << "Channel " << _channel << " has valid ToA ratio " << valid_toa_ratio * 100 << "%, which is below the threshold " << threshold_toa_ratio_valid * 100 << "%, so it will NOT be included in the ToA filtered ADC peak analysis"; 
@@ -667,7 +683,7 @@ int main(int argc, char **argv) {
             legend_sample->SetFillStyle(0);
             legend_sample->SetBorderSize(0);
             auto* h1d_peak = new TH1D(("h1d_peak_channel_" + std::to_string(_channel)).c_str(), ("ADC Peak (Limited to Sample Index " + std::to_string(peak_index_max) + ") Distribution for Channel " + std::to_string(_channel) + ";ADC Peak;Count").c_str(), adc_hist_bins, adc_hist_min, adc_hist_max);
-            int start_index = static_cast<int>(channel_adc_peak_list.size() * 0.8);
+            int start_index = static_cast<int>(channel_adc_peak_list.size() * 0.9);
             for (size_t i = start_index; i < channel_adc_peak_list.size(); i++) {
                 h1d_peak->Fill(channel_adc_peak_list[i]);
             }
@@ -686,28 +702,67 @@ int main(int argc, char **argv) {
             if (last_bin_fraction > saturation_threshold) {
                 // Saturation detected
                 fit_mean = 1023.0;
-                fit_sigma = 1/sqrt(12) * 1.0; // assuming uniform distribution between 1023 and 1024 for the saturated bin
+                fit_sigma = 1.0 / sqrt(12.0); // assuming uniform distribution between 1023 and 1024 for the saturated bin
                 LOG(WARNING) << "Channel " << _channel << " shows saturation (last bin has " << last_bin_fraction * 100 << "% of counts). Assigning mean=1023, sigma=" << fit_sigma << " and skipping Gaussian fit. ";
-                // create dummy TF1 for legend entry
+                // Create dummy TF1 with fixed parameters and use Fit with N option (no actual fit, just store)
                 TF1* dummy_fit = new TF1("fit_func", "gaus", 0, 1023);
-                dummy_fit->FixParameter(0, 1023.0); // fix the amplitude to 1023, which is the maximum ADC value
-                dummy_fit->FixParameter(1, fit_mean); // fix the mean to 1023
-                dummy_fit->FixParameter(2, fit_sigma); // fix the sigma to 0
-                // attach to the hist
-                h1d_peak->Fit(dummy_fit, "RQ", "", 0, 1023); // fit in an arbitrary range to set the parameters
-                // dummy_fit->SetParameter(1, fit_mean);
-                // dummy_fit->SetParameter(2, fit_sigma);
-                // dummy_fit->Draw("same");    
+                dummy_fit->AddToGlobalList(false);
+                dummy_fit->SetParameter(0, h1d_peak->GetMaximum()); // amplitude
+                dummy_fit->SetParameter(1, fit_mean); // mean = 1023
+                dummy_fit->SetParameter(2, fit_sigma); // sigma
+                dummy_fit->FixParameter(0, h1d_peak->GetMaximum());
+                dummy_fit->FixParameter(1, fit_mean);
+                dummy_fit->FixParameter(2, fit_sigma);
+                // Add to histogram's function list without fitting
+                h1d_peak->GetListOfFunctions()->Add(dummy_fit);
                 legend_sample->AddEntry(dummy_fit, ("Saturation detected: mean = " + std::to_string(fit_mean) + " ADC, sigma = " + std::to_string(fit_sigma) + " ADC").c_str(), "l");
-                legend_sample->AddEntry((TObject*)nullptr, ("Saturation detected: mean = " + std::to_string(fit_mean) + " ADC, sigma = " + std::to_string(fit_sigma) + " ADC").c_str(), "");
                 // set the last bin to 0 count
                 h1d_peak->SetBinContent(last_bin, 0);
             } else {
-                // Proceed with Gaussian fit
-                double hist_mean = h1d_peak->GetMean();
+                // Two-stage Gaussian fit
+                // double hist_mean = h1d_peak->GetMean();
+                // rebin
+                h1d_peak->Rebin(4);
+                // force all the bins under 80 ADC to be 0
+                for (int bin = 1; bin <= h1d_peak->GetNbinsX(); ++bin) {
+                    if (h1d_peak->GetXaxis()->GetBinCenter(bin) < 80) {
+                        h1d_peak->SetBinContent(bin, 0);
+                    }
+                }
+                int max_value_bin = h1d_peak->GetMaximumBin();
+                double hist_mean = h1d_peak->GetXaxis()->GetBinCenter(max_value_bin);
                 double hist_rms = h1d_peak->GetRMS();
-                double fit_range_min = hist_mean - 3.0 * hist_rms;
-                double fit_range_max = hist_mean + 3.0 * hist_rms;
+                double prefit_range_min = hist_mean - 4.0 * hist_rms;
+                double prefit_range_max = hist_mean + 4.0 * hist_rms;
+                if (prefit_range_min < 0) {
+                    prefit_range_min = 0;
+                }
+                if (prefit_range_max > 1023) {
+                    prefit_range_max = 1023;
+                }
+                
+                // If last bin has 1-10% of counts, exclude it from fit range
+                if (last_bin_fraction > saturation_ignore_threshold) {
+                    double last_bin_low_edge = h1d_peak->GetXaxis()->GetBinLowEdge(last_bin);
+                    if (prefit_range_max > last_bin_low_edge) {
+                        prefit_range_max = last_bin_low_edge;
+                        LOG(INFO) << "Channel " << _channel << " has " << last_bin_fraction * 100 << "% in last bin. Excluding last bin from fit (max range: " << prefit_range_max << ")";
+                    }
+                }
+                
+                // Stage 1: Pre-fit to get rough parameters
+                TF1* prefit_func = new TF1("prefit_func", "gaus", prefit_range_min, prefit_range_max);
+                prefit_func->SetParameters(h1d_peak->GetMaximum(), hist_mean, hist_rms);
+                // limit the sigma parameter to be within [0.5*hist_rms, 2*hist_rms] to avoid unphysical pre-fit results due to statistical fluctuation
+                prefit_func->SetParLimits(2, 0.5 * hist_rms, 2.0 * hist_rms);
+                h1d_peak->Fit(prefit_func, "RQN");  // N option: don't store in histogram's function list
+                double prefit_mean = prefit_func->GetParameter(1);
+                double prefit_sigma = prefit_func->GetParameter(2);
+                delete prefit_func;
+                
+                // Stage 2: Final fit using pre-fit results
+                double fit_range_min = prefit_mean - 3.0 * prefit_sigma;
+                double fit_range_max = prefit_mean + 3.0 * prefit_sigma;
                 if (fit_range_min < 0) {
                     fit_range_min = 0;
                 }
@@ -715,17 +770,8 @@ int main(int argc, char **argv) {
                     fit_range_max = 1023;
                 }
                 
-                // If last bin has 1-10% of counts, exclude it from fit range
-                if (last_bin_fraction > saturation_ignore_threshold) {
-                    double last_bin_low_edge = h1d_peak->GetXaxis()->GetBinLowEdge(last_bin);
-                    if (fit_range_max > last_bin_low_edge) {
-                        fit_range_max = last_bin_low_edge;
-                        LOG(INFO) << "Channel " << _channel << " has " << last_bin_fraction * 100 << "% in last bin. Excluding last bin from fit (max range: " << fit_range_max << ")";
-                    }
-                }
-                
                 TF1* fit_func = new TF1("fit_func", "gaus", fit_range_min, fit_range_max);
-                fit_func->SetParameters(h1d_peak->GetMaximum(), hist_mean, hist_rms);
+                fit_func->SetParameters(h1d_peak->GetMaximum(), prefit_mean, prefit_sigma);
                 h1d_peak->Fit(fit_func, "RQ");
                 fit_func->SetLineColor(kRed);
                 fit_func->Draw("same");

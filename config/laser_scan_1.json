@@ -1,0 +1,18 @@
+{
+    "scan_brief": "ADC values of current conveyor gain scan",
+    "scan_data": "ADC",
+    "scan_configs":[
+        "config/scan_number_6.json",
+        "config/scan_number_7.json",
+        "config/scan_number_8.json",
+        "config/scan_number_9.json",
+        "config/scan_number_10.json"
+    ],
+    "scan_config_labels":[
+        "CC 15",
+        "CC 8",
+        "CC 1",
+        "CC 2",
+        "CC 4"
+    ]
+}

@@ -18,10 +18,10 @@ LOG_DIR = "logs"
 # data_files_focal = glob(os.path.join(FoCal_DATA_DIR, "Run*.h2g"))
 data_files_10g = glob(os.path.join(GENERAL_DATA_DIR, "Run*.h2g"))
 
-# Extract RunXXX identifiers
-# run_ids_eeemcal = [re.search(r'Run(\d+)\.h2g$', f).group(1) for f in data_files_eeemcal if re.search(r'Run(\d+)\.h2g$', f)]
-# run_ids_focal = [re.search(r'Run(\d+)\.h2g$', f).group(1) for f in data_files_focal if re.search(r'Run(\d+)\.h2g$', f)]
-run_ids_10g = [re.search(r'Run(\d+)\.h2g$', f).group(1) for f in data_files_10g if re.search(r'Run(\d+)\.h2g$', f)]
+# Extract RunXXX identifiers (padded to 3 digits)
+# run_ids_eeemcal = [re.search(r'Run(\d+)\.h2g$', f).group(1).zfill(3) for f in data_files_eeemcal if re.search(r'Run(\d+)\.h2g$', f)]
+# run_ids_focal = [re.search(r'Run(\d+)\.h2g$', f).group(1).zfill(3) for f in data_files_focal if re.search(r'Run(\d+)\.h2g$', f)]
+run_ids_10g = [re.search(r'Run(\d+)\.h2g$', f).group(1).zfill(3) for f in data_files_10g if re.search(r'Run(\d+)\.h2g$', f)]
 
 
 rule Rootifier_10G:
@@ -69,14 +69,21 @@ rule EventMatch:
         {input[0]} -f {input[1]} -o {output} &> {log}
         """
 
-def get_adc_analysis_files_for_scan(wildcards):
+def get_run_numbers_for_scan(scan_id):
     import json
-    json_file = f"config/scan_number_{wildcards.scan_id}.json"
+    json_file = f"config/scan_number_{scan_id}.json"
     with open(json_file, 'r') as f:
         scan_config = json.load(f)
-    # Extract run numbers from JSON (adjust key names as needed)
     run_numbers = scan_config.get("runs", scan_config.get("run_numbers", scan_config.get("run_ids", [])))
-    return [f"dump/401_ADC_Analysis/Run{run_id}.root" for run_id in run_numbers]
+    return [int(run_id) for run_id in run_numbers]
+
+def get_adc_analysis_files_for_scan(wildcards):
+    run_numbers = get_run_numbers_for_scan(wildcards.scan_id)
+    return expand("dump/401_ADC_Analysis/Run{run_id}.root", run_id=[f"{r:03d}" for r in run_numbers])
+
+def get_tot_analysis_files_for_scan(wildcards):
+    run_numbers = get_run_numbers_for_scan(wildcards.scan_id)
+    return expand("dump/404_ToT_Analysis/Run{run_id}.root", run_id=[f"{r:03d}" for r in run_numbers])
 
 def get_laser_scan_input_files(wildcards):
     import json
@@ -129,3 +136,38 @@ rule Laser_Scan:
         "logs/403_Laser_Scan/LaserScan{scan_id}.log"
     shell:
         "{input.script} -f {input.jsonfile} -o {output.rootfile} &> {log}"
+
+rule ToT_Analysis:
+    input:
+        script="build/404_ToT_Analysis",
+        rootfile="dump/102_EventMatch/Run{run_id}_matched.root"
+    output:
+        rootfile="dump/404_ToT_Analysis/Run{run_id}.root"
+    log:
+        "logs/404_ToT_Analysis/Run{run_id}.log"
+    shell:
+        "{input.script} -f {input.rootfile} -o {output.rootfile} &> {log}"
+
+rule ToT_Scan:
+    input:
+        script="build/405_ToT_Scan",
+        jsonfile="config/scan_number_{scan_id}.json",
+        adcdatafiles=get_adc_analysis_files_for_scan,
+        totdatafiles=get_tot_analysis_files_for_scan
+    output:
+        rootfile="dump/405_ToT_Scan/ToTScan{scan_id}.root"
+    log:
+        "logs/405_ToT_Scan/ToTScan{scan_id}.log"
+    shell:
+        "{input.script} -f {input.jsonfile} -o {output.rootfile} &> {log}"
+
+rule ADC_ToT_Combine:
+    input:
+        script="build/406_ADC_ToT_Combine",
+        rootfile="dump/102_EventMatch/Run{run_id}_matched.root"
+    output:
+        rootfile="dump/406_ADC_ToT_Combine/Run{run_id}_combined.root"
+    log:
+        "logs/406_ADC_ToT_Combine/Run{run_id}_combine.log"
+    shell:
+        "{input.script} -f {input.ootfile} -o {output.rootfile} &> {log}"
