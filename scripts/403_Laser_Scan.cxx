@@ -246,17 +246,23 @@ int main(int argc, char **argv) {
     TGraphErrors *slope_graph = new TGraphErrors(linear_fit_slopes.size());
     bool has_cc_label = false;
     bool has_bias_label = false;
+    bool has_cf_label = false;
     for (const auto& label : scan_config_labels) {
         has_cc_label = has_cc_label || (label.find("CC") != std::string::npos);
         has_bias_label = has_bias_label || (label.find("V") != std::string::npos);
+        has_cf_label = has_cf_label || (label.find("Cf") != std::string::npos);
     }
     std::string slope_x_title = "Bias Voltage (V)";
     std::string slope_scan_label = "Bias Voltage Scan";
     std::string right_axis_title = "Relative slope to lowest bias";
-    if (has_cc_label && !has_bias_label) {
+    if (has_cc_label && !has_bias_label && !has_cf_label) {
         slope_x_title = "Current Conveyor (CC)";
         slope_scan_label = "Current Conveyor Scan";
         right_axis_title = "Relative slope to lowest CC";
+    } else if (has_cf_label && !has_bias_label && !has_cc_label) {
+        slope_x_title = "Feedback Capacitor (Cf)";
+        slope_scan_label = "Feedback Capacitor Scan";
+        right_axis_title = "Relative slope to lowest Cf";
     }
     auto parse_label_value = [](const std::string& label, const std::string& key) -> double {
         size_t key_pos = label.find(key);
@@ -270,6 +276,7 @@ int main(int argc, char **argv) {
         return value;
     };
 
+    std::vector<double> fit_bias_voltages;
     for (size_t i = 0; i < linear_fit_slopes.size(); i++) {
         int sub_config_index = linear_fit_sub_config_indices[i];
         int channel_number = linear_fit_channel_numbers[i];
@@ -284,13 +291,11 @@ int main(int argc, char **argv) {
                     continue;
                 }
                 slope_graph->SetPoint(i, bias_voltage, linear_fit_slopes[i]);
+                fit_bias_voltages.push_back(bias_voltage);
+                // print channel number
+                LOG(INFO) << "Channel " << channel_number << ": Adding point to slope graph: bias voltage = " << bias_voltage << ", slope = " << linear_fit_slopes[i] << ", slope error = " << linear_fit_slope_errors[i];
                 slope_graph->SetPointError(i, 0.01, linear_fit_slope_errors[i]);
             } 
-    //             "scan_config_labels":[
-    //     "CC 15",
-    //     "CC 8",
-    //     "CC 2"
-    // ]
             if (sub_label.find("CC") != std::string::npos) {
                 double cc_value = parse_label_value(sub_label, "CC");
                 if (!std::isfinite(cc_value)) {
@@ -300,8 +305,18 @@ int main(int argc, char **argv) {
                 slope_graph->SetPoint(i, cc_value, linear_fit_slopes[i]);
                 slope_graph->SetPointError(i, 0.01, linear_fit_slope_errors[i]);
             }
+            if (sub_label.find("Cf") != std::string::npos) {
+                double cf_value = parse_label_value(sub_label, "Cf");
+                if (!std::isfinite(cf_value)) {
+                    LOG(WARNING) << "Failed to parse Cf value from label: " << sub_label;
+                    continue;
+                }
+                slope_graph->SetPoint(i, cf_value, linear_fit_slopes[i]);
+                slope_graph->SetPointError(i, 0.01, linear_fit_slope_errors[i]);
+            }
         } else {
             LOG(WARNING) << "Sub-config index " << sub_config_index << " not found in scan_config_labels. Skipping.";
+            fit_bias_voltages.push_back(std::numeric_limits<double>::quiet_NaN());
             continue;
         }
     }
@@ -337,6 +352,25 @@ int main(int argc, char **argv) {
         right_axis->SetTitleFont(slope_graph->GetYaxis()->GetTitleFont());
         right_axis->Draw();
     }
+
+    // save the fit slopes, channel numbers, slope errors, bias voltages (if applicable) to the ROOT file
+    TVectorD slope_values(linear_fit_slopes.size());
+    TVectorD slope_errors(linear_fit_slope_errors.size());
+    TVectorD channel_numbers(linear_fit_channel_numbers.size());
+    TVectorD bias_voltages(fit_bias_voltages.size());
+    for (size_t i = 0; i < linear_fit_slopes.size(); i++) {
+        slope_values[i] = linear_fit_slopes[i];
+        slope_errors[i] = linear_fit_slope_errors[i];
+        channel_numbers[i] = linear_fit_channel_numbers[i];
+        bias_voltages[i] = fit_bias_voltages[i];
+    }
+    slope_values.Write("slope_values");
+    slope_errors.Write("slope_errors");
+    channel_numbers.Write("channel_numbers");
+    if (!fit_bias_voltages.empty()) {
+        bias_voltages.Write("bias_voltages");
+    }
+    
 
     TLatex *latex = new TLatex();
     latex->SetNDC();

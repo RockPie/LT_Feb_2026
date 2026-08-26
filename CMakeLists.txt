@@ -18,17 +18,17 @@ if(DEFINED ENV{CONDA_PREFIX})
 endif()
 
 # Set ROOT installation path explicitly
-set(ROOT_DIR "/home/shihai/sw/root/root_install") # Adjust to your ROOT installation path
-list(APPEND CMAKE_PREFIX_PATH ${ROOT_DIR})
+set(MY_ROOT_DIR "/home/shihai/sw/root/root_install") # Adjust to your ROOT installation path
+list(APPEND CMAKE_PREFIX_PATH ${MY_ROOT_DIR})
 
 # Configure RPATH to only use custom ROOT installation
 set(CMAKE_SKIP_BUILD_RPATH FALSE)
 set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
 set(CMAKE_INSTALL_RPATH_USE_LINK_PATH FALSE)
-set(CMAKE_INSTALL_RPATH "${ROOT_DIR}/lib")
+set(CMAKE_INSTALL_RPATH "${MY_ROOT_DIR}/lib")
 
 # Add linker flags to prefer custom ROOT
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-rpath,${ROOT_DIR}/lib")
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-rpath,${MY_ROOT_DIR}/lib")
 
 # Add optimization flags and OpenMP
 find_package(OpenMP REQUIRED)
@@ -157,7 +157,7 @@ foreach(script ${scripts})
         ${csv_parser_SOURCE_DIR}/single_include
     )
 
-    target_link_libraries(${script_name}
+    target_link_libraries(${script_name} PUBLIC
         H2GCROC_Common
         H2GCROC_Lib
         easyloggingpp
@@ -167,4 +167,9 @@ foreach(script ${scripts})
         ROOT::ROOTDataFrame
         OpenMP::OpenMP_CXX
     )
+    
+    # Special handling for 409_ToT_Recover which uses MathMore
+    if(script_name STREQUAL "409_ToT_Recover")
+        target_link_libraries(${script_name} PRIVATE ${MY_ROOT_DIR}/lib/libMathMore.so)
+    endif()
 endforeach(script)

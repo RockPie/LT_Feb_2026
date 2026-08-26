@@ -1,0 +1,16 @@
+{
+    "scan_brief": "ToT values of bias voltage scan",
+    "scan_data": "ToT",
+    "scan_configs":[
+        "config/scan_number_11.json",
+        "config/scan_number_12.json",
+        "config/scan_number_13.json",
+        "config/scan_number_14.json"
+    ],
+    "scan_config_labels":[
+        "45 V",
+        "44 V",
+        "43 V",
+        "47 V"
+    ]
+}

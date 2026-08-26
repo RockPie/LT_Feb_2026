@@ -257,6 +257,39 @@ int main(int argc, char **argv) {
         h2d_toa_shifted_adc_waveform_channel_list.push_back(h2d_toa_shifted_adc_waveform_channel);
     }
 
+    // adc max v.s. adc average correlation for each channel
+    std::vector<TH2D*> h2d_adc_peak_limited_v_adc_average_channel_list;
+    for (int _chn=0; _chn<FPGA_CHANNEL_NUMBER * fpga_count; _chn++) {
+        std::string hist_name = "h2d_adc_peak_limited_v_adc_average_channel_" + std::to_string(_chn);
+        auto *h2d_adc_peak_limited_v_adc_average_channel = new TH2D(
+            hist_name.c_str(),
+            ("Correlation between ADC Peak (Limited to Index " + std::to_string(peak_index_max) + ") and ADC Average for Channel " + std::to_string(_chn) + ";ADC Average;ADC Peak").c_str(),
+            adc_hist_bins,
+            adc_hist_min,
+            adc_hist_max,
+            adc_hist_bins,
+            adc_hist_min,
+            adc_hist_max
+        );
+        h2d_adc_peak_limited_v_adc_average_channel->SetDirectory(nullptr);
+        h2d_adc_peak_limited_v_adc_average_channel_list.push_back(h2d_adc_peak_limited_v_adc_average_channel);
+    }
+
+    // h1d for adc average distribution for each channel
+    std::vector<TH1D*> h1d_adc_average_channel_list;
+    for (int _chn=0; _chn<FPGA_CHANNEL_NUMBER * fpga_count; _chn++) {
+        std::string hist_name = "h1d_adc_average_channel_" + std::to_string(_chn);
+        auto *h1d_adc_average_channel = new TH1D(
+            hist_name.c_str(),
+            ("ADC Average for Channel " + std::to_string(_chn) + ";ADC Average;Count").c_str(),
+            adc_hist_bins,
+            adc_hist_min,
+            adc_hist_max
+        );
+        h1d_adc_average_channel->SetDirectory(nullptr);
+        h1d_adc_average_channel_list.push_back(h1d_adc_average_channel);
+    }
+
     std::vector<double> channel_valid_toa_count_list(FPGA_CHANNEL_NUMBER * fpga_count, 0.0); // to count the number of events with valid ToA for each channel, which will decide whether to use toa for max searching
     std::vector<std::vector<double>> channel_adc_peak_sample_values_list(FPGA_CHANNEL_NUMBER * fpga_count);
     for (auto& vec : channel_adc_peak_sample_values_list) {
@@ -266,6 +299,9 @@ int main(int argc, char **argv) {
     for (auto& vec : channel_pedestal_list) {
         vec.reserve(entry_max);
     }
+
+    int adc_averaging_sample_start_index = 0;
+    int adc_averaging_sample_end_index = 15;
 
     for (int _entry = 0; _entry < entry_max; _entry++) {
         input_tree->GetEntry(_entry);
@@ -344,6 +380,13 @@ int main(int argc, char **argv) {
                 }
                 channel_pedestal_list[_fpga_index * FPGA_CHANNEL_NUMBER + _channel_index].push_back(_adc_pedestal);
 
+                // calculate the average ADC subtracting pedestal
+                double _adc_average_minus_pedestal = 0.0;
+                for (int _sample_index = adc_averaging_sample_start_index; _sample_index <= adc_averaging_sample_end_index; _sample_index++) {
+                    _adc_average_minus_pedestal += static_cast<double>(_adc_samples[_sample_index]) - _adc_pedestal;
+                }
+                _adc_average_minus_pedestal /= (static_cast<double>(adc_averaging_sample_end_index) - static_cast<double>(adc_averaging_sample_start_index) + 1.0);
+
                 _adc_peak = *std::max_element(_adc_samples.begin(), _adc_samples.end());
                 for (int _sample_index = 0; _sample_index < machine_gun_samples; _sample_index++) {
                     if (_adc_samples[_sample_index] == _adc_peak) {
@@ -358,10 +401,13 @@ int main(int argc, char **argv) {
                         _adc_peak_limited = _adc_samples[_sample_index];
                     }
                 }
+                h1d_adc_average_channel_list[_fpga_index * FPGA_CHANNEL_NUMBER + _channel_index]->Fill(_adc_average_minus_pedestal);
+
                 // double _adc_peak_limited_minus_pedestal = _adc_peak_limited - _adc_pedestal;
                 double _adc_peak_limited_minus_pedestal = _adc_peak_limited;
                 h1d_adc_peak_limited_minus_pedestal_channel_list[_fpga_index * FPGA_CHANNEL_NUMBER + _channel_index]->Fill(_adc_peak_limited_minus_pedestal);
                 channel_adc_peak_sample_values_list[_fpga_index * FPGA_CHANNEL_NUMBER + _channel_index].push_back(_adc_peak_limited);
+                h2d_adc_peak_limited_v_adc_average_channel_list[_fpga_index * FPGA_CHANNEL_NUMBER + _channel_index]->Fill(_adc_average_minus_pedestal, _adc_peak_limited_minus_pedestal);
 
                 if (_toa_first != 0) {
                     double _toa_first_ns = static_cast<double>(_toa_first) * 0.025 + static_cast<double>(_toa_first_sample_index) * sample_time; // convert ToA to ns, and add the time of the first sample index
@@ -422,6 +468,12 @@ int main(int argc, char **argv) {
     canvas_adc_samples->Update();
     canvas_adc_samples->Write();
 
+    auto canvas_adc_peak_limited_v_adc_average = new TCanvas("canvas_adc_peak_limited_v_adc_average", ("Correlation between ADC Peak (Limited to Sample Index " + std::to_string(peak_index_max) + ") and ADC Average;Channel;Correlation").c_str(), 1200, 800);
+    draw_mosaic_fixed(*canvas_adc_peak_limited_v_adc_average, h2d_adc_peak_limited_v_adc_average_channel_list, mosaic_setup.topo_ped_median);
+    canvas_adc_peak_limited_v_adc_average->Modified();
+    canvas_adc_peak_limited_v_adc_average->Update();
+    canvas_adc_peak_limited_v_adc_average->Write();
+
     auto canvas_adc_peak_index = new TCanvas("canvas_adc_peak_index", "ADC Peak Sample Index Distribution;Channel;Sample Index", 1200, 800);
     draw_mosaic_fixed(*canvas_adc_peak_index, h1d_adc_peak_index_channel_list, mosaic_setup.topo_ped_median);
     canvas_adc_peak_index->Modified();
@@ -452,6 +504,7 @@ int main(int argc, char **argv) {
     canvas_adc_peak_limited_toa_filtered_minus_pedestal->Update();
     canvas_adc_peak_limited_toa_filtered_minus_pedestal->Write();
 
+
     const double saturation_threshold = 0.2; // if the last bin has more than 10% of counts, consider it as saturation
     const double saturation_ignore_threshold = 0.01; // if the last bin has more than 1% of counts, ignore it in fitting
 
@@ -465,6 +518,32 @@ int main(int argc, char **argv) {
             LOG(WARNING) << "Interested but covered channel " << _channel << " is out of range, skipping";
             continue;
         }
+
+        // draw the unfiltered ADC peak distribution and unfiltered ADC peak distribution of the channel
+        auto canvas_unfiltered = new TCanvas(("canvas_unfiltered_channel_" + std::to_string(_channel)).c_str(), ("Unfiltered ADC Peak Distribution for Channel " + std::to_string(_channel)).c_str(), 1000, 600);
+
+        TLegend* legend = new TLegend(0.6, 0.7, 0.89, 0.89);
+        legend->SetFillStyle(0);
+        legend->SetBorderSize(0);
+        canvas_unfiltered->SetLogy();
+        auto h1d_unfiltered = h1d_adc_peak_limited_minus_pedestal_channel_list[_channel];
+        auto h1d_filtered = h1d_adc_peak_limited_toa_filtered_minus_pedestal_channel_list[_channel];
+        h1d_unfiltered->SetStats(kFALSE);
+        h1d_unfiltered->SetTitle("");
+        format_1d_hist_canvas(canvas_unfiltered, h1d_unfiltered, kBlue+2, "Laser Test with H2GCROC", "Raw ADC Peak Distribution", ("Channel " + std::to_string(_channel)).c_str());
+        h1d_filtered->SetLineColor(kRed+2);
+        h1d_filtered->SetLineWidth(2);
+        h1d_filtered->Draw("hist same");
+        legend->AddEntry(h1d_unfiltered, "Unfiltered ADC Peak", "l");
+        legend->AddEntry(h1d_filtered, "ToA Filtered ADC Peak", "l");
+        legend->Draw();
+        canvas_unfiltered->Modified();
+        canvas_unfiltered->Update();
+        canvas_unfiltered->Write();
+        // save as a seprate pdf file
+        canvas_unfiltered->SaveAs((opts.output_file + "_unfiltered_channel_" + std::to_string(_channel) + ".pdf").c_str());
+        canvas_unfiltered->Close();
+
         double valid_toa_ratio = channel_valid_toa_count_list[_channel] / processed_entries;
         if (valid_toa_ratio >= threshold_toa_ratio_valid) {
             LOG(INFO) << "Channel " << _channel << " has valid ToA ratio " << valid_toa_ratio * 100 << "%, which is above the threshold " << threshold_toa_ratio_valid * 100 << "%, so it will be included in the ToA filtered ADC peak analysis";
@@ -528,9 +607,6 @@ int main(int argc, char **argv) {
                     // set the last bin to 0 count
                     sliding_result.hY->SetBinContent(last_bin, 0);
                 } else {
-                    // Two-stage Gaussian fit
-                    // double hist_mean = sliding_result.hY->GetMean();
-                    // rebin
                     sliding_result.hY->Rebin(4); // rebin by a factor of 4 to reduce statistical fluctuation for fitting
                     // force all the bins under 80 ADC to be 0
                     for (int bin = 1; bin <= sliding_result.hY->GetNbinsX(); ++bin) {
@@ -785,6 +861,22 @@ int main(int argc, char **argv) {
             canvas_peak->Write();
         }
 
+    }
+
+    // save the average adc minus pedestal for each channel of the interested channels as TCanvas in the same directory
+    for (int _channel : interested_channels) {
+        if (_channel < 0 || _channel >= FPGA_CHANNEL_NUMBER * fpga_count) {
+            LOG(WARNING) << "Interested but covered channel " << _channel << " is out of range, skipping";
+            continue;
+        }
+        auto canvas_average = new TCanvas(("canvas_average_channel_" + std::to_string(_channel)).c_str(), ("ADC Average Minus Pedestal Distribution for Channel " + std::to_string(_channel)).c_str(), 800, 600);
+        auto h1d_average = h1d_adc_average_channel_list[_channel];
+        h1d_average->SetStats(kFALSE);
+        h1d_average->SetTitle(("ADC Average Minus Pedestal Distribution for Channel " + std::to_string(_channel) + ";ADC Average - Pedestal;Count").c_str());
+        h1d_average->Draw("hist");
+        canvas_average->Modified();
+        canvas_average->Update();
+        canvas_average->Write();
     }
 
     output_root->Close();

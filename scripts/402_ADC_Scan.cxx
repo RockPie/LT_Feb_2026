@@ -176,6 +176,7 @@ int main(int argc, char **argv) {
 
     std::vector<std::vector<double>> channel_adc_peak_mean_list(interested_channels.size());
     std::vector<std::vector<double>> channel_adc_peak_sigma_list(interested_channels.size());
+    std::vector<std::vector<double>> channel_resolution_list(interested_channels.size());
     std::vector<double> channel_laser_intensity_list;
     std::vector<double> channel_laser_intensity_error_list;
 
@@ -259,7 +260,14 @@ int main(int argc, char **argv) {
                     // add bias as legend entrym, keep only two digits for the laser intensity
                     char legend_label[64];
                     snprintf(legend_label, sizeof(legend_label), "%.2f a.u.", laser_intensities[run_number_index]);
-                    legend->AddEntry(hist, legend_label, "l");
+                    // calculate resolution
+                    double resolution = (gaus_fit && gaus_fit->GetParameter(1) != 0) ? (gaus_fit->GetParameter(2) / gaus_fit->GetParameter(1)) * 100 : 0;
+                    LOG(INFO) << "Run " << run_numbers[run_number_index] << ", Channel " << channel << ": resolution = " << resolution << " %";
+                    channel_resolution_list[channel_index].push_back(resolution);
+                    // add resolution to the legend entry
+                    char legend_label_with_resolution[128];
+                    snprintf(legend_label_with_resolution, sizeof(legend_label_with_resolution), "%s, Res = %.2f %%", legend_label, resolution);
+                    legend->AddEntry(hist, legend_label_with_resolution, "l");
                 }
             }
         }
@@ -348,6 +356,38 @@ int main(int argc, char **argv) {
         }
         canvas->SaveAs(pdf_output_file.c_str());
         canvas->Close();
+    }
+
+    // draw resolution vs mean ADC for each channel
+    for (size_t channel_index = 0; channel_index < interested_channels.size(); channel_index++) {
+        int channel = interested_channels[channel_index];
+        TCanvas *canvas_resolution = new TCanvas(("canvas_resolution_vs_mean_channel_" + std::to_string(channel)).c_str(), ("Resolution vs Mean ADC - Channel " + std::to_string(channel)).c_str(), 1000, 600);
+        canvas_resolution->cd();
+        TGraphErrors *graph_resolution = new TGraphErrors();
+        int point_index = 0;
+        for (size_t i = 0; i < channel_adc_peak_mean_list[channel_index].size(); i++) {
+            double mean = channel_adc_peak_mean_list[channel_index][i];
+            double sigma = channel_adc_peak_sigma_list[channel_index][i];
+            double resolution = channel_resolution_list[channel_index][i];
+            if (std::isfinite(mean) && std::isfinite(resolution) && mean > 0) {
+                graph_resolution->SetPoint(point_index, mean, resolution);
+                graph_resolution->SetPointError(point_index, sigma, 0.1);  // error in X: sigma, error in Y: 0.1%
+                point_index++;
+            }
+        }
+        graph_resolution->SetTitle("");
+        graph_resolution->GetXaxis()->SetTitle("Mean ADC Peak");
+        graph_resolution->GetYaxis()->SetTitle("Resolution (%)");
+        graph_resolution->SetMarkerStyle(20);
+        graph_resolution->SetMarkerSize(1.0);
+        graph_resolution->Draw("AP");
+        canvas_resolution->Write();
+        std::string pdf_output_file = opts.output_file;
+        if (pdf_output_file.size() > 5 && pdf_output_file.substr(pdf_output_file.size() - 5) == ".root") {
+            pdf_output_file = pdf_output_file.substr(0, pdf_output_file.size() - 5) + "_resolution_vs_mean_channel_" + std::to_string(channel) + ".pdf";
+        }
+        canvas_resolution->SaveAs(pdf_output_file.c_str());
+        canvas_resolution->Close();
     }
 
     output_root->Close();

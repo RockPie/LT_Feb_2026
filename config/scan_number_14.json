@@ -1,0 +1,23 @@
+{
+    "scan_brief": "Scan 14: Laser 5.8, CC 4, Cf 10, Cfcomp 10",
+    "scan_bias": 50,
+    "scan_CC": 4,
+    "scan_Cf": 10,
+    "scan_Cfcomp": 10,
+    "run_numbers": [
+        272,
+        296,
+        334,
+        367,
+        409,
+        454
+    ],
+    "laser_intensities": [
+        43,
+        44,
+        45,
+        47,
+        50,
+        54
+    ]
+}

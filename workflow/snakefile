@@ -85,6 +85,23 @@ def get_tot_analysis_files_for_scan(wildcards):
     run_numbers = get_run_numbers_for_scan(wildcards.scan_id)
     return expand("dump/404_ToT_Analysis/Run{run_id}.root", run_id=[f"{r:03d}" for r in run_numbers])
 
+def get_tot_scan_files_for_scan(wildcards):
+    import json
+    json_file = f"config/laser_scan_{wildcards.scan_id}.json"
+    with open(json_file, 'r') as f:
+        scan_config = json.load(f)
+    scan_data = scan_config.get("scan_data", "")
+    scan_configs = scan_config.get("scan_configs", [])
+    if scan_data != "ToT":
+        return []
+    input_files = []
+    for config_path in scan_configs:
+        match = re.search(r"scan_number_(\d+)\.json$", config_path)
+        if match:
+            scan_id = match.group(1)
+            input_files.append(f"dump/405_ToT_Scan/ToTScan{scan_id}.root")
+    return input_files
+
 def get_laser_scan_input_files(wildcards):
     import json
     json_file = f"config/laser_scan_{wildcards.scan_id}.json"
@@ -170,4 +187,56 @@ rule ADC_ToT_Combine:
     log:
         "logs/406_ADC_ToT_Combine/Run{run_id}_combine.log"
     shell:
-        "{input.script} -f {input.ootfile} -o {output.rootfile} &> {log}"
+        "{input.script} -f {input.rootfile} -o {output.rootfile} &> {log}"
+
+# rule Laser_Scan:
+#     input:
+#         script="build/403_Laser_Scan",
+#         jsonfile="config/laser_scan_{scan_id}.json",
+#         datafiles=get_laser_scan_input_files
+#     output:
+#         rootfile="dump/403_Laser_Scan/LaserScan{scan_id}.root"
+#     log:
+#         "logs/403_Laser_Scan/LaserScan{scan_id}.log"
+#     shell:
+#         "{input.script} -f {input.jsonfile} -o {output.rootfile} &> {log}"
+
+rule ToT_Laser_Scan:
+    input:
+        script="build/407_ToT_Laser_Scan",
+        jsonfile="config/laser_scan_{scan_id}.json",
+        totdatafiles=get_tot_scan_files_for_scan
+    output:
+        rootfile="dump/407_ToT_Laser_Scan/ToTLaserScan{scan_id}.root"
+    log:
+        "logs/407_ToT_Laser_Scan/ToTLaserScan{scan_id}.log"
+    shell:
+        "{input.script} -f {input.jsonfile} -o {output.rootfile} &> {log}"
+
+rule ADC_ToT_Slope_Compare:
+    input:
+        script="build/408_Slope_Compare_ADC_ToT",
+        input0="dump/403_Laser_Scan/LaserScan0.root",
+        input1="dump/407_ToT_Laser_Scan/ToTLaserScan3.root"
+    output:
+        rootfile="dump/408_Slope_Compare_ADC_ToT/Compare0.root"
+    log:
+        "logs/408_Slope_Compare_ADC_ToT/Compare0.log"
+    shell:
+        "{input.script} &> {log}"
+
+rule ToT_Recover:
+    input:
+        script="build/409_ToT_Recover",
+        tot_scan="dump/405_ToT_Scan/ToTScan{scan_id}.root",
+        adc_scan="dump/402_ADC_Scan/Scan{scan_id}.root"
+    output:
+        rootfile="dump/409_ToT_Recover/RecoveredToTScan{scan_id}.root"
+    log:
+        "logs/409_ToT_Recover/RecoveredToTScan{scan_id}.log"
+    shell:
+        """
+        mkdir -p $(dirname {output.rootfile})
+        mkdir -p $(dirname {log})
+        {input.script} {input.tot_scan} {input.adc_scan} {output.rootfile} &> {log}
+        """

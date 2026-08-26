@@ -37,6 +37,8 @@ int main(int argc, char **argv) {
     const auto& run_numbers = scan_json["run_numbers"].get<std::vector<int>>();
     const auto& laser_intensities = scan_json["laser_intensities"].get<std::vector<double>>();
 
+    const int min_entrys_threshold = 1;
+
     LOG(INFO) << "Scan brief: " << scan_brief;
     LOG(INFO) << "Scan bias: " << scan_bias;
     LOG(INFO) << "Scan CC: " << scan_CC;
@@ -337,15 +339,19 @@ int main(int argc, char **argv) {
         int channel = interested_channels[channel_index];
         TCanvas *canvas = new TCanvas(("canvas_mean_peak_vs_laser_channel_" + std::to_string(channel)).c_str(), ("Mean ADC Peak vs Laser Intensity - Channel " + std::to_string(channel)).c_str(), 800, 600);
         canvas->cd();
-        TGraphErrors *graph = new TGraphErrors(channel_laser_intensity_list.size());
+        TGraphErrors *graph = new TGraphErrors();
+        int point_index = 0;
         for (size_t i = 0; i < channel_laser_intensity_list.size(); i++) {
-            // filter out nan value
-            if (std::isnan(channel_adc_peak_mean_list[channel_index][i]) || std::isnan(channel_adc_peak_sigma_list[channel_index][i])) {
+            double mean = channel_adc_peak_mean_list[channel_index][i];
+            double sigma = channel_adc_peak_sigma_list[channel_index][i];
+            // filter out nan and zero value
+            if (std::isnan(mean) || std::isnan(sigma)) {
                 LOG(WARNING) << "NaN value found for Channel " << channel << ", Laser Intensity " << channel_laser_intensity_list[i] << ": mean = " << channel_adc_peak_mean_list[channel_index][i] << ", sigma = " << channel_adc_peak_sigma_list[channel_index][i] << ". Skipping this point.";
                 continue;
             }
-            graph->SetPoint(i, channel_laser_intensity_list[i], channel_adc_peak_mean_list[channel_index][i]);
-            graph->SetPointError(i, channel_laser_intensity_error_list[i], channel_adc_peak_sigma_list[channel_index][i]);
+            graph->SetPoint(point_index, channel_laser_intensity_list[i], mean);
+            graph->SetPointError(point_index, channel_laser_intensity_error_list[i], sigma);
+            point_index++;
         }
         graph->SetTitle("");
         graph->GetXaxis()->SetTitle("Laser Intensity");
@@ -404,6 +410,11 @@ int main(int argc, char **argv) {
         for (size_t run_number_index = 0; run_number_index < run_numbers.size(); run_number_index++) {
             if (channel_index < channel_tot_th1ds.size() && run_number_index < channel_tot_th1ds[channel_index].size()) {
                 TH1D *hist = channel_tot_th1ds[channel_index][run_number_index];
+                // if the entries are less than the minimum threshold, return 0 and skip this histogram
+                if (hist && hist->GetEntries() < min_entrys_threshold) {
+                    LOG(WARNING) << "Histogram for Run " << run_numbers[run_number_index] << ", Channel " << channel << " has less than " << min_entrys_threshold << " entries (" << hist->GetEntries() << "). Skipping this histogram.";
+                    continue;
+                }
                 if (hist) {
                     // get the 1% min and 99% max quantiles
                     double quantile_result_min = 0;
@@ -430,6 +441,10 @@ int main(int argc, char **argv) {
             double laser_intensity = laser_intensities[run_number_index];
             if (channel_index < channel_tot_th1ds.size() && run_number_index < channel_tot_th1ds[channel_index].size()) {
                 TH1D *hist = channel_tot_th1ds[channel_index][run_number_index];
+                if (hist && hist->GetEntries() < min_entrys_threshold) {
+                    LOG(WARNING) << "Histogram for Run " << run_numbers[run_number_index] << ", Channel " << channel << " has less than " << min_entrys_threshold << " entries (" << hist->GetEntries() << "). Skipping this histogram.";
+                    continue;
+                }
                 if (hist) {
                     hist->SetLineColor(run_number_index + 1);
                     hist->GetXaxis()->SetRangeUser(global_x_min, global_x_max);
@@ -506,10 +521,15 @@ int main(int argc, char **argv) {
 
         TCanvas *canvas_mean_tot_vs_laser = new TCanvas(("canvas_mean_tot_vs_laser_channel_" + std::to_string(channel)).c_str(), ("Mean ToT vs Laser Intensity - Channel " + std::to_string(channel)).c_str(), 800, 600);
         canvas_mean_tot_vs_laser->cd();
-        TGraphErrors *graph_mean_tot = new TGraphErrors(tot_means.size());
+        TGraphErrors *graph_mean_tot = new TGraphErrors();
+        int point_index = 0;
         for (size_t i = 0; i < tot_means.size(); i++) {
-            graph_mean_tot->SetPoint(i, tot_laser_intensities[i], tot_means[i]);
-            graph_mean_tot->SetPointError(i, tot_laser_intensity_errors[i], tot_mean_errors[i]);
+            // if (!std::isfinite(tot_means[i])) {
+            //     continue;
+            // }
+            graph_mean_tot->SetPoint(point_index, tot_laser_intensities[i], tot_means[i]);
+            graph_mean_tot->SetPointError(point_index, tot_laser_intensity_errors[i], tot_mean_errors[i]);
+            point_index++;
         }
         graph_mean_tot->SetTitle("");
         graph_mean_tot->GetXaxis()->SetTitle("Laser Intensity");

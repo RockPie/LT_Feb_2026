@@ -11,12 +11,14 @@
 #include <sstream>
 #include <stdexcept>
 #include <cctype>
+#include <numeric>
 
 #include "TGraphErrors.h"
 #include "TGraph.h"
 #include "TF1.h"
 #include "TSpline.h"
-
+#include "TRandom3.h"
+#include "Math/Interpolator.h"
 
 // =============================================================================
 // Data containers
@@ -438,4 +440,313 @@ inline TotToAdcLUT LoadTotToAdcLUT(const std::string& filepath,
     }
 
     throw std::runtime_error("LoadTotToAdcLUT: no valid data found in: " + filepath);
+}
+
+static double LinInterp(const std::vector<double>& xs,
+                        const std::vector<double>& ys,
+                        double xq)
+{
+    if (xs.size() < 2) return NAN;
+    if (xq < xs.front() || xq > xs.back()) return NAN;
+
+    auto it = std::upper_bound(xs.begin(), xs.end(), xq);
+    size_t j = std::max<size_t>(1, std::distance(xs.begin(), it)) - 1;
+
+    double x0 = xs[j],   x1 = xs[j+1];
+    double y0 = ys[j],   y1 = ys[j+1];
+    double t  = (xq - x0) / (x1 - x0);
+    return y0 + t * (y1 - y0);
+}
+
+static void GraphToSortedArrays(const TGraphErrors* g,
+                                std::vector<double>& xs,
+                                std::vector<double>& ys,
+                                std::vector<double>& exs,
+                                std::vector<double>& eys)
+{
+    xs.clear(); ys.clear(); exs.clear(); eys.clear();
+    const int n = g ? g->GetN() : 0;
+    xs.reserve(n); ys.reserve(n); exs.reserve(n); eys.reserve(n);
+
+    std::vector<std::tuple<double,double,double,double>> tmp;
+    tmp.reserve(n);
+
+    for (int i = 0; i < n; ++i) {
+        double x, y;
+        g->GetPoint(i, x, y);
+        double ex = g->GetErrorX(i);
+        double ey = g->GetErrorY(i);
+        tmp.emplace_back(x, y, ex, ey);
+    }
+
+    std::sort(tmp.begin(), tmp.end(),
+              [](auto& a, auto& b){ return std::get<0>(a) < std::get<0>(b); });
+
+    for (auto& t : tmp) {
+        xs.push_back(std::get<0>(t));
+        ys.push_back(std::get<1>(t));
+        exs.push_back(std::get<2>(t));
+        eys.push_back(std::get<3>(t));
+    }
+}
+
+static std::pair<double,int> Similarity_Chi2NDF_ScaledX(
+    const TGraphErrors* gRef,
+    const TGraphErrors* gMov,
+    double X0,
+    double s,
+    bool useSplineForRefY = true
+){
+    if (!gRef || !gMov) return {NAN, 0};
+    if (gRef->GetN() < 2 || gMov->GetN() < 1) return {NAN, 0};
+
+    std::vector<double> xR, yR, exR, eyR;
+    GraphToSortedArrays(gRef, xR, yR, exR, eyR);
+
+    double xMin = xR.front();
+    double xMax = xR.back();
+
+    std::unique_ptr<TSpline3> sp;
+    if (useSplineForRefY) {
+        TGraph gTmp((int)xR.size(), xR.data(), yR.data());
+        sp.reset(new TSpline3("sp_ref_y", &gTmp));
+    }
+
+    auto evalRefY = [&](double xq)->double {
+        if (xq < xMin || xq > xMax) return NAN;
+        if (useSplineForRefY) return sp->Eval(xq);
+        return LinInterp(xR, yR, xq);
+    };
+
+    auto evalRefEy = [&](double xq)->double {
+        return LinInterp(xR, eyR, xq);
+    };
+    double chi2 = 0.0;
+    int nUsed = 0;
+
+    const int nM = gMov->GetN();
+    for (int i = 0; i < nM; ++i) {
+        double x, y;
+        gMov->GetPoint(i, x, y);
+        double eyM = gMov->GetErrorY(i);
+
+        double xScaled = X0 + s * (x - X0);
+        if (xScaled < xMin || xScaled > xMax) continue;
+
+        double yRef = evalRefY(xScaled);
+        if (!std::isfinite(yRef)) continue;
+
+        double eyR_i = evalRefEy(xScaled);
+        if (!std::isfinite(eyR_i)) eyR_i = 0.0;
+
+        double sigma2 = eyM*eyM + eyR_i*eyR_i;
+        if (sigma2 <= 0) continue;
+
+        double r = (y - yRef) / std::sqrt(sigma2);
+        chi2 += r*r;
+        nUsed++;
+    }
+
+    if (nUsed < 2) return {NAN, nUsed};
+    double chi2ndf = chi2 / (nUsed - 1);
+    return {chi2ndf, nUsed};
+}
+
+TGraph* ScanScaleSimilarity(
+    const TGraphErrors* gRef,
+    const TGraphErrors* gMov,
+    double X0,
+    double sMin,
+    double sMax,
+    int nSteps,
+    bool useSplineForRefY = true
+){
+    if (nSteps < 2) return nullptr;
+
+    auto out = new TGraph();
+    out->SetName("g_scale_similarity");
+    out->SetTitle("Similarity vs x-scale;scale s;#chi^{2}/NDF");
+
+    for (int k = 0; k < nSteps; ++k) {
+        // Use logarithmic spacing instead of linear
+        double s = sMin * std::pow(sMax / sMin, (double)k / (double)(nSteps - 1));
+        auto [chi2ndf, nUsed] = Similarity_Chi2NDF_ScaledX(gRef, gMov, X0, s, useSplineForRefY);
+
+        if (!std::isfinite(chi2ndf)) continue;
+
+        out->SetPoint(out->GetN(), s, chi2ndf);
+    }
+    return out;
+}
+
+TGraphErrors* ScaleX_TGraphErrors(
+    const TGraphErrors* g,
+    double s,
+    double X0,
+    const char* newName = "g_scaled"
+){
+    if (!g) return nullptr;
+
+    int n = g->GetN();
+    if (n <= 0) return nullptr;
+
+    auto* gOut = new TGraphErrors(n);
+    gOut->SetName(newName);
+
+    for (int i = 0; i < n; ++i) {
+        double x, y;
+        g->GetPoint(i, x, y);
+
+        double ex = g->GetErrorX(i);
+        double ey = g->GetErrorY(i);
+
+        // 进行放缩
+        double xScaled  = X0 + s * (x - X0);
+        double exScaled = std::abs(s) * ex;
+
+        gOut->SetPoint(i, xScaled, y);
+        gOut->SetPointError(i, exScaled, ey);
+    }
+
+    gOut->SetTitle(g->GetTitle());
+    return gOut;
+}
+
+static inline void DedupByX(std::vector<double>& xs,
+                     std::vector<double>& ys,
+                     std::vector<double>& exs,
+                     std::vector<double>& eys,
+                     double eps = 1e-12)
+{
+    if (xs.empty()) return;
+    std::vector<double> nx, ny, nex, ney;
+    nx.reserve(xs.size()); ny.reserve(xs.size());
+    nex.reserve(xs.size()); ney.reserve(xs.size());
+
+    nx.push_back(xs[0]);
+    ny.push_back(ys[0]);
+    nex.push_back(exs[0]);
+    ney.push_back(eys[0]);
+
+    for (size_t i=1;i<xs.size();++i){
+        if (std::abs(xs[i]-nx.back()) < eps){
+            // skip duplicate-x point
+            continue;
+        }
+        nx.push_back(xs[i]);
+        ny.push_back(ys[i]);
+        nex.push_back(exs[i]);
+        ney.push_back(eys[i]);
+    }
+    xs.swap(nx); ys.swap(ny); exs.swap(nex); eys.swap(ney);
+}
+
+inline TGraphErrors* InterpolateWithUncertainty_AkimaMC(const TGraphErrors* gin,
+                                                 int nFine = 400,
+                                                 int nMC   = 800,
+                                                 bool includeXUnc = true,
+                                                 UInt_t seed = 0)
+{
+    if (!gin || gin->GetN() < 3) {
+        throw std::runtime_error("Need at least 3 points for Akima interpolation.");
+    }
+    if (nFine < 2) nFine = 2;
+    if (nMC < 50)  nMC = 50;
+
+    // 1) 取点并按 x 排序
+    std::vector<std::tuple<double,double,double,double>> pts;
+    pts.reserve(gin->GetN());
+    for (int i=0;i<gin->GetN();++i){
+        double x,y; gin->GetPoint(i,x,y);
+        double ex = gin->GetErrorX(i);
+        double ey = gin->GetErrorY(i);
+        pts.emplace_back(x,y,ex,ey);
+    }
+    std::sort(pts.begin(), pts.end(),
+              [](auto& a, auto& b){ return std::get<0>(a) < std::get<0>(b); });
+
+    std::vector<double> xs, ys, exs, eys;
+    xs.reserve(pts.size()); ys.reserve(pts.size());
+    exs.reserve(pts.size()); eys.reserve(pts.size());
+    for (auto &t: pts){
+        xs.push_back(std::get<0>(t));
+        ys.push_back(std::get<1>(t));
+        exs.push_back(std::get<2>(t));
+        eys.push_back(std::get<3>(t));
+    }
+
+    DedupByX(xs, ys, exs, eys);
+    if (xs.size() < 3) throw std::runtime_error("Too few unique-x points after dedup.");
+
+    // 2) 定义输出 x 网格（均匀）
+    const double xmin = xs.front();
+    const double xmax = xs.back();
+    std::vector<double> xq(nFine);
+    for (int i=0;i<nFine;++i){
+        xq[i] = xmin + (xmax-xmin)*i/(nFine-1.0);
+    }
+
+    // 3) MC 累积：对每个 xq 累加 y 和 y^2
+    std::vector<double> sumY(nFine, 0.0), sumY2(nFine, 0.0);
+
+    TRandom3 rng(seed);
+
+    // MC loop
+    for (int k=0;k<nMC;++k){
+        // 3.1) 采样一组“伪数据”
+        std::vector<std::pair<double,double>> spts;
+        spts.reserve(xs.size());
+        for (size_t i=0;i<xs.size();++i){
+            double xk = xs[i];
+            double yk = ys[i];
+
+            const double ex = exs[i];
+            const double ey = eys[i];
+
+            if (includeXUnc && ex > 0) xk = rng.Gaus(xs[i], ex);
+            if (ey > 0) yk = rng.Gaus(ys[i], ey);
+
+            spts.push_back({xk, yk});
+        }
+
+        // 3.2) 排序 + 去重（MC 后 x 可能乱序/重复）
+        std::sort(spts.begin(), spts.end(),
+                  [](auto&a, auto&b){ return a.first < b.first; });
+
+        std::vector<double> sx, sy;
+        sx.reserve(spts.size()); sy.reserve(spts.size());
+        for (auto &p: spts){
+            if (!sx.empty() && std::abs(p.first - sx.back()) < 1e-12) continue;
+            sx.push_back(p.first);
+            sy.push_back(p.second);
+        }
+        if (sx.size() < 3) continue; // 极端情况下跳过
+
+        // 3.3) 构造 Akima 插值器并评估
+        ROOT::Math::Interpolator itp(sx, sy, ROOT::Math::Interpolation::kAKIMA);
+
+        for (int i=0;i<nFine;++i){
+            double yv = itp.Eval(xq[i]);
+            sumY[i]  += yv;
+            sumY2[i] += yv*yv;
+        }
+    }
+
+    // 4) 汇总均值与方差 -> 输出 TGraphErrors
+    auto gout = new TGraphErrors(nFine);
+    for (int i=0;i<nFine;++i){
+        const double mean = sumY[i] / nMC;
+        double var = sumY2[i] / nMC - mean*mean;
+        if (var < 0) var = 0; // 数值保护
+        const double ey = std::sqrt(var);
+
+        gout->SetPoint(i, xq[i], mean);
+
+        // 输出 ex 怎么设：你可以设 0，或者设为网格半步长（代表“bin宽”概念）
+        double ex_out = 0.0;
+        // double ex_out = (xmax-xmin)/(nFine-1.0)/2.0;
+        gout->SetPointError(i, ex_out, ey);
+    }
+
+    return gout;
 }

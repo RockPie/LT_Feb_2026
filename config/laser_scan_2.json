@@ -1,0 +1,14 @@
+{
+    "scan_brief": "ADC values of feedback capacitor scan",
+    "scan_data": "ADC",
+    "scan_configs":[
+        "config/scan_number_11.json",
+        "config/scan_number_12.json",
+        "config/scan_number_13.json"
+    ],
+    "scan_config_labels":[
+        "Cf 2",
+        "Cf 4",
+        "Cf 10"
+    ]
+}
