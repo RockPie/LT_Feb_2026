@@ -35,12 +35,18 @@ int main(int argc, char **argv) {
     const auto& scan_Cfcomp = scan_json["scan_Cfcomp"].get<double>();
     const auto& run_numbers = scan_json["run_numbers"].get<std::vector<int>>();
     const auto& laser_intensities = scan_json["laser_intensities"].get<std::vector<double>>();
+    const bool has_configured_example_channels = scan_json.contains("example_channels");
+    const std::vector<int> example_channels = has_configured_example_channels
+        ? scan_json["example_channels"].get<std::vector<int>>()
+        : std::vector<int>();
 
     LOG(INFO) << "Scan brief: " << scan_brief;
     LOG(INFO) << "Scan bias: " << scan_bias;
     LOG(INFO) << "Scan CC: " << scan_CC;
     LOG(INFO) << "Scan Cf: " << scan_Cf;
     LOG(INFO) << "Scan Cfcomp: " << scan_Cfcomp;
+    LOG(INFO) << "Example channels source: "
+              << (has_configured_example_channels ? "scan config" : "ADC analysis output");
 
     std::string scan_info_str = "Scan";
     std::smatch scan_match;
@@ -57,8 +63,11 @@ int main(int argc, char **argv) {
     }
 
     std::string data_file_prefix = "dump/401_ADC_Analysis/Run";
-    std::vector<int> interested_channels;
-    std::vector<std::vector<TH1D*>> channel_histograms; // indexed by channel, then by run
+    if (input_scan_json.find("LT_Sep_2026") != std::string::npos) {
+        data_file_prefix = "dump/401_ADC_Analysis/LT_Sep_2026/Run";
+    }
+    std::vector<int> interested_channels = example_channels;
+    std::vector<std::vector<TH1D*>> channel_histograms(interested_channels.size()); // indexed by channel, then by run
 
     for (int run_number_index = 0; run_number_index < run_numbers.size(); run_number_index++) {
         auto& run_number = run_numbers[run_number_index];
@@ -99,12 +108,10 @@ int main(int argc, char **argv) {
                             LOG(WARNING) << "Failed to parse channel from canvas name " << canvas_name << ". Skipping.";
                             continue;
                         }
-                        if (run_number_index == 0) {
-                            // add if not in the interested channels
-                            if (std::find(interested_channels.begin(), interested_channels.end(), channel) == interested_channels.end()) {
-                                interested_channels.push_back(channel);
-                                channel_histograms.push_back(std::vector<TH1D*>());
-                            }
+                        if (!has_configured_example_channels && run_number_index == 0
+                            && std::find(interested_channels.begin(), interested_channels.end(), channel) == interested_channels.end()) {
+                            interested_channels.push_back(channel);
+                            channel_histograms.push_back(std::vector<TH1D*>());
                         }
                         auto channel_it = std::find(interested_channels.begin(), interested_channels.end(), channel);
                         if (channel_it == interested_channels.end()) {
@@ -131,12 +138,10 @@ int main(int argc, char **argv) {
                             LOG(WARNING) << "Failed to parse channel from canvas name " << canvas_name << ". Skipping.";
                             continue;
                         }
-                        if (run_number_index == 0) {
-                            // add if not in the interested channels
-                            if (std::find(interested_channels.begin(), interested_channels.end(), channel) == interested_channels.end()) {
-                                interested_channels.push_back(channel);
-                                channel_histograms.push_back(std::vector<TH1D*>());
-                            }
+                        if (!has_configured_example_channels && run_number_index == 0
+                            && std::find(interested_channels.begin(), interested_channels.end(), channel) == interested_channels.end()) {
+                            interested_channels.push_back(channel);
+                            channel_histograms.push_back(std::vector<TH1D*>());
                         }
                         auto channel_it = std::find(interested_channels.begin(), interested_channels.end(), channel);
                         if (channel_it == interested_channels.end()) {

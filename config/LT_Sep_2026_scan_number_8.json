@@ -1,0 +1,40 @@
+{
+    "scan_brief": "Scan 8: Position x 0 (left), y 0 (top), Bias 45, RF 4, CF 4, CC 3, CFC 4, ToT Target 300",
+    "example_channels": [90, 92, 96, 98],
+    "scan_bias": 45,
+    "scan_CC": 3,
+    "scan_Cf": 4,
+    "scan_Cfcomp": 4,
+    "run_numbers": [
+        417,
+        418,
+        419,
+        420,
+        421,
+        422,
+        423,
+        424,
+        425,
+        426,
+        427,
+        428,
+        429,
+        430
+    ],
+    "laser_intensities": [
+        520,
+        560,
+        580,
+        600,
+        640,
+        680,
+        720,
+        760,
+        800,
+        840,
+        880,
+        920,
+        960,
+        1000
+    ]
+}

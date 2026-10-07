@@ -6,6 +6,8 @@ include: "rules/compile.smk"
 import os
 from glob import glob
 import re
+import shutil
+import sys
 
 # Directories
 BUILD_DIR = "build"
@@ -22,6 +24,44 @@ data_files_10g = glob(os.path.join(GENERAL_DATA_DIR, "Run*.h2g"))
 # run_ids_eeemcal = [re.search(r'Run(\d+)\.h2g$', f).group(1).zfill(3) for f in data_files_eeemcal if re.search(r'Run(\d+)\.h2g$', f)]
 # run_ids_focal = [re.search(r'Run(\d+)\.h2g$', f).group(1).zfill(3) for f in data_files_focal if re.search(r'Run(\d+)\.h2g$', f)]
 run_ids_10g = [re.search(r'Run(\d+)\.h2g$', f).group(1).zfill(3) for f in data_files_10g if re.search(r'Run(\d+)\.h2g$', f)]
+
+LT_SEP_2026_DATA_DIR = GENERAL_DATA_DIR + "/LT_Sep_2026"
+data_files_lt_sep_2026 = glob(os.path.join(LT_SEP_2026_DATA_DIR, "Run*.h2g"))
+lt_sep_2026_scan_configs = glob("config/LT_Sep_2026_scan_number_*.json")
+lt_sep_2026_scan_ids = sorted(
+    [re.search(r"scan_number_(\d+)\.json$", path).group(1)
+     for path in lt_sep_2026_scan_configs
+     if re.search(r"scan_number_(\d+)\.json$", path)],
+    key=int)
+
+
+def is_header_only_h2g(path):
+    with open(path, "rb") as raw_file:
+        opening = raw_file.readline(4096)
+        delimiter = opening.rstrip(b"\r\n")
+        if len(delimiter) < 11 or delimiter.strip(b"#"):
+            return False
+        for header_index in range(256):
+            line = raw_file.readline(4096)
+            if line.rstrip(b"\r\n") == delimiter:
+                return raw_file.read(1) == b""
+            if not line.startswith(b"#") or not line.endswith(b"\n"):
+                return False
+    return False
+
+
+header_only_lt_sep_2026 = [path for path in data_files_lt_sep_2026 if is_header_only_h2g(path)]
+if header_only_lt_sep_2026:
+    print("Excluding header-only LT_Sep_2026 runs from aggregate targets: "
+          + ", ".join(sorted(header_only_lt_sep_2026)), file=sys.stderr)
+data_files_lt_sep_2026 = [path for path in data_files_lt_sep_2026 if path not in header_only_lt_sep_2026]
+run_ids_lt_sep_2026 = [re.search(r'Run(\d+)\.h2g$', f).group(1).zfill(3) for f in data_files_lt_sep_2026 if re.search(r'Run(\d+)\.h2g$', f)]
+
+analysis_output_names = sorted(
+    os.path.splitext(os.path.basename(path))[0]
+    for path in glob("scripts/*.cxx")
+    if re.match(r"(?:303|4\d\d)_", os.path.basename(path))
+)
 
 
 rule Rootifier_10G:
@@ -67,6 +107,211 @@ rule EventMatch:
         mkdir -p {LOG_DIR}
         mkdir -p {DUMP_DIR}/102_EventMatch
         {input[0]} -f {input[1]} -o {output} &> {log}
+        """
+
+
+rule Rootifier_10G_LT_Sep_2026:
+    input:
+        script=BUILD_DIR + "/103_Rootifier_10G",
+        raw=LT_SEP_2026_DATA_DIR + "/Run{run_id}.h2g"
+    output:
+        rootfile=DUMP_DIR + "/103_Rootifier_10G/LT_Sep_2026/Run{run_id}_rootified.root"
+    log:
+        LOG_DIR + "/103_Rootifier_10G/LT_Sep_2026/Run{run_id}.log"
+    shell:
+        """
+        mkdir -p $(dirname {output.rootfile}) $(dirname {log})
+        {input.script} -f {input.raw} -o {output.rootfile} &> {log}
+        """
+
+
+rule EventRecon10G_LT_Sep_2026:
+    input:
+        script=BUILD_DIR + "/101_EventRecon",
+        rootfile=DUMP_DIR + "/103_Rootifier_10G/LT_Sep_2026/Run{run_id}_rootified.root"
+    output:
+        rootfile=DUMP_DIR + "/101_EventRecon/LT_Sep_2026/Run{run_id}_recon.root"
+    log:
+        LOG_DIR + "/101_EventRecon/LT_Sep_2026/Run{run_id}_recon.log"
+    shell:
+        """
+        mkdir -p $(dirname {output.rootfile}) $(dirname {log})
+        {input.script} -f {input.rootfile} -o {output.rootfile} &> {log}
+        """
+
+
+rule EventMatch_LT_Sep_2026:
+    input:
+        script=BUILD_DIR + "/102_EventMatch",
+        rootfile=DUMP_DIR + "/101_EventRecon/LT_Sep_2026/Run{run_id}_recon.root"
+    output:
+        rootfile=DUMP_DIR + "/102_EventMatch/LT_Sep_2026/Run{run_id}_matched.root"
+    log:
+        LOG_DIR + "/102_EventMatch/LT_Sep_2026/Run{run_id}_match.log"
+    shell:
+        """
+        mkdir -p $(dirname {output.rootfile}) $(dirname {log})
+        {input.script} -f {input.rootfile} -o {output.rootfile} &> {log}
+        """
+
+
+rule ADC_Analysis_LT_Sep_2026:
+    input:
+        script=BUILD_DIR + "/303_ADC_Analysis",
+        rootfile=DUMP_DIR + "/102_EventMatch/LT_Sep_2026/Run{run_id}_matched.root"
+    output:
+        rootfile=DUMP_DIR + "/303_ADC_Analysis/LT_Sep_2026/Run{run_id}.root"
+    log:
+        LOG_DIR + "/303_ADC_Analysis/LT_Sep_2026/Run{run_id}.log"
+    shell:
+        """
+        mkdir -p $(dirname {output.rootfile}) $(dirname {log})
+        {input.script} -f {input.rootfile} -o {output.rootfile} &> {log}
+        """
+
+
+rule ADC_Analysis_Regular_LT_Sep_2026:
+    input:
+        script=BUILD_DIR + "/401_ADC_Analysis",
+        rootfile=DUMP_DIR + "/102_EventMatch/LT_Sep_2026/Run{run_id}_matched.root"
+    output:
+        rootfile=DUMP_DIR + "/401_ADC_Analysis/LT_Sep_2026/Run{run_id}.root"
+    log:
+        LOG_DIR + "/401_ADC_Analysis/LT_Sep_2026/Run{run_id}.log"
+    resources:
+        mem_mb=2000
+    shell:
+        """
+        mkdir -p $(dirname {output.rootfile}) $(dirname {log})
+        {input.script} -f {input.rootfile} -o {output.rootfile} &> {log}
+        """
+
+
+rule ToT_Analysis_LT_Sep_2026:
+    input:
+        script=BUILD_DIR + "/404_ToT_Analysis",
+        rootfile=DUMP_DIR + "/102_EventMatch/LT_Sep_2026/Run{run_id}_matched.root"
+    output:
+        rootfile=DUMP_DIR + "/404_ToT_Analysis/LT_Sep_2026/Run{run_id}.root"
+    log:
+        LOG_DIR + "/404_ToT_Analysis/LT_Sep_2026/Run{run_id}.log"
+    shell:
+        """
+        mkdir -p $(dirname {output.rootfile}) $(dirname {log})
+        {input.script} -f {input.rootfile} -o {output.rootfile} &> {log}
+        """
+
+
+rule ADC_ToT_Combine_LT_Sep_2026:
+    input:
+        script=BUILD_DIR + "/406_ADC_ToT_Combine",
+        rootfile=DUMP_DIR + "/102_EventMatch/LT_Sep_2026/Run{run_id}_matched.root"
+    output:
+        rootfile=DUMP_DIR + "/406_ADC_ToT_Combine/LT_Sep_2026/Run{run_id}_combined.root"
+    log:
+        LOG_DIR + "/406_ADC_ToT_Combine/LT_Sep_2026/Run{run_id}_combine.log"
+    shell:
+        """
+        mkdir -p $(dirname {output.rootfile}) $(dirname {log})
+        {input.script} -f {input.rootfile} -o {output.rootfile} &> {log}
+        """
+
+
+def get_lt_sep_2026_run_ids(scan_id):
+    import json
+    config_path = f"config/LT_Sep_2026_scan_number_{scan_id}.json"
+    with open(config_path, "r") as config_file:
+        scan_config = json.load(config_file)
+    return [f"{int(run_id):03d}" for run_id in scan_config["run_numbers"]]
+
+
+def get_lt_sep_2026_outputs(wildcards, output_pattern):
+    return expand(output_pattern, run_id=get_lt_sep_2026_run_ids(wildcards.scan_id))
+
+
+rule ADC_Scan_LT_Sep_2026:
+    input:
+        script=BUILD_DIR + "/402_ADC_Scan",
+        config="config/LT_Sep_2026_scan_number_{scan_id}.json",
+        datafiles=lambda wildcards: get_lt_sep_2026_outputs(
+            wildcards, DUMP_DIR + "/401_ADC_Analysis/LT_Sep_2026/Run{run_id}.root")
+    output:
+        rootfile=DUMP_DIR + "/402_ADC_Scan/LT_Sep_2026/Scan{scan_id}.root"
+    log:
+        LOG_DIR + "/402_ADC_Scan/LT_Sep_2026/Scan{scan_id}.log"
+    shell:
+        """
+        mkdir -p $(dirname {output.rootfile}) $(dirname {log})
+        {input.script} -f {input.config} -o {output.rootfile} &> {log}
+        """
+
+
+rule ToT_Scan_LT_Sep_2026:
+    input:
+        script=BUILD_DIR + "/405_ToT_Scan",
+        config="config/LT_Sep_2026_scan_number_{scan_id}.json",
+        adcdatafiles=lambda wildcards: get_lt_sep_2026_outputs(
+            wildcards, DUMP_DIR + "/401_ADC_Analysis/LT_Sep_2026/Run{run_id}.root"),
+        totdatafiles=lambda wildcards: get_lt_sep_2026_outputs(
+            wildcards, DUMP_DIR + "/404_ToT_Analysis/LT_Sep_2026/Run{run_id}.root")
+    output:
+        rootfile=DUMP_DIR + "/405_ToT_Scan/LT_Sep_2026/ToTScan{scan_id}.root"
+    log:
+        LOG_DIR + "/405_ToT_Scan/LT_Sep_2026/ToTScan{scan_id}.log"
+    shell:
+        """
+        mkdir -p $(dirname {output.rootfile}) $(dirname {log})
+        {input.script} -f {input.config} -o {output.rootfile} &> {log}
+        """
+
+
+rule LT_Sep_2026_scan:
+    input:
+        config="config/LT_Sep_2026_scan_number_{scan_id}.json",
+        adc_scan=DUMP_DIR + "/402_ADC_Scan/LT_Sep_2026/Scan{scan_id}.root",
+        tot_scan=DUMP_DIR + "/405_ToT_Scan/LT_Sep_2026/ToTScan{scan_id}.root",
+        matched=lambda wildcards: get_lt_sep_2026_outputs(
+            wildcards, DUMP_DIR + "/102_EventMatch/LT_Sep_2026/Run{run_id}_matched.root"),
+        adc_303=lambda wildcards: get_lt_sep_2026_outputs(
+            wildcards, DUMP_DIR + "/303_ADC_Analysis/LT_Sep_2026/Run{run_id}.root"),
+        adc_401=lambda wildcards: get_lt_sep_2026_outputs(
+            wildcards, DUMP_DIR + "/401_ADC_Analysis/LT_Sep_2026/Run{run_id}.root"),
+        tot_404=lambda wildcards: get_lt_sep_2026_outputs(
+            wildcards, DUMP_DIR + "/404_ToT_Analysis/LT_Sep_2026/Run{run_id}.root")
+    output:
+        DUMP_DIR + "/LT_Sep_2026/Scan{scan_id}.done"
+    shell:
+        """
+        mkdir -p $(dirname {output})
+        touch {output}
+        """
+
+
+rule LT_Sep_2026_all_scans:
+    input:
+        expand(DUMP_DIR + "/LT_Sep_2026/Scan{scan_id}.done", scan_id=lt_sep_2026_scan_ids)
+    output:
+        DUMP_DIR + "/LT_Sep_2026/all_scans.done"
+    shell:
+        """
+        mkdir -p $(dirname {output})
+        touch {output}
+        """
+
+
+rule LT_Sep_2026_all:
+    input:
+        matched=expand(DUMP_DIR + "/102_EventMatch/LT_Sep_2026/Run{run_id}_matched.root", run_id=run_ids_lt_sep_2026),
+        adc_303=expand(DUMP_DIR + "/303_ADC_Analysis/LT_Sep_2026/Run{run_id}.root", run_id=run_ids_lt_sep_2026),
+        adc_401=expand(DUMP_DIR + "/401_ADC_Analysis/LT_Sep_2026/Run{run_id}.root", run_id=run_ids_lt_sep_2026),
+        tot_404=expand(DUMP_DIR + "/404_ToT_Analysis/LT_Sep_2026/Run{run_id}.root", run_id=run_ids_lt_sep_2026),
+        combined_406=expand(DUMP_DIR + "/406_ADC_ToT_Combine/LT_Sep_2026/Run{run_id}_combined.root", run_id=run_ids_lt_sep_2026)
+    output:
+        DUMP_DIR + "/LT_Sep_2026/all.done"
+    shell:
+        """
+        mkdir -p $(dirname {output})
+        touch {output}
         """
 
 def get_run_numbers_for_scan(scan_id):
@@ -127,6 +372,8 @@ rule ADC_Analysis:
         rootfile="dump/401_ADC_Analysis/Run{run_id}.root"
     log:
         "logs/401_ADC_Analysis/Run{run_id}.log"
+    resources:
+        mem_mb=2000
     shell:
         "{input.script} -f {input.rootfile} -o {output.rootfile} &> {log}"
 
@@ -240,3 +487,26 @@ rule ToT_Recover:
         mkdir -p $(dirname {log})
         {input.script} {input.tot_scan} {input.adc_scan} {output.rootfile} &> {log}
         """
+
+
+rule clean_analysis:
+    message:
+        "Removing analysis outputs and logs while preserving stages 101-103"
+    params:
+        output_dirs=[
+            os.path.join(base_dir, analysis_name)
+            for base_dir in (DUMP_DIR, LOG_DIR)
+            for analysis_name in analysis_output_names
+        ]
+    run:
+        for output_path in params.output_dirs:
+            if os.path.isdir(output_path):
+                print(f"Removing {output_path}")
+                shutil.rmtree(output_path)
+            elif os.path.exists(output_path):
+                print(f"Removing {output_path}")
+                os.remove(output_path)
+
+        for marker_path in glob(os.path.join(DUMP_DIR, "LT_Sep_2026", "*.done")):
+            print(f"Removing {marker_path}")
+            os.remove(marker_path)

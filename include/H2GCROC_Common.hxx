@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 #include <string>
 #include <regex>
+#include <vector>
 
 #include "TCanvas.h"
 #include "TVectorD.h"
@@ -51,6 +52,10 @@
 #endif
 
 using json = nlohmann::json;
+
+inline const std::vector<int> CONFIGURABLE_EXAMPLE_CHANNELS = {
+    90, 92, 96, 98, 116, 117, 126, 127, 128, 129, 134, 135, 136, 137, 138
+};
 
 // ============================================================================
 // LOGGING

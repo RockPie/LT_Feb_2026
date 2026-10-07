@@ -79,9 +79,9 @@ int main(int argc, char **argv) {
 
     // std::vector<int> interested_channels = {68, 72, 62, 58, 54, 50, 46, 42, 74, 70, 64, 60, 52, 48, 44, 40, 71, 67 ,63, 59, 55, 49, 43, 39, 73, 69, 65, 61, 53, 51, 45, 41};
 
-    std::vector<int> interested_channels = {50, 52};
+    std::vector<int> interested_channels = {126, 128};
 
-    std::vector<int> interested_but_covered_channels = {54, 58};
+    std::vector<int> interested_but_covered_channels = {130, 134};
 
     const int pedestal_index_max = 1; // think the pedestal is stable, and the first two samples are enough to calculate the pedestal
     const int peak_index_min = 5;
@@ -351,8 +351,8 @@ int main(int argc, char **argv) {
                 }
                 double _combined_value = adc_tot_combine(_adc_peak, _adc_pedestal, _tot_decoded_for_combination, lut);
                 channel_combined_peak_sample_values_list[_fpga_index * FPGA_CHANNEL_NUMBER + _channel_index].push_back(_combined_value);
-                // if is the first 100 events, print the details for channel 50
-                if (processed_entries <= 100 && (_channel_index == 50 || _channel_index == 52)) {
+                // if is the first 100 events, print the details for the interested channels
+                if (processed_entries <= 100 && (_channel_index == 126 || _channel_index == 128)) {
                     LOG(INFO) << "Entry " << _entry << " FPGA "<< _fpga_id << " Channel " << _channel_index << " - ADC samples: " << _adc_samples[0] << ", " << _adc_samples[1] << ", " << _adc_samples[2] << ", " << _adc_samples[3] << ", " << _adc_samples[4] << ", ... ToT first: " << _tot_decoded_for_combination << " ToA first: " << _toa_first * 0.025 + static_cast<double>(_toa_first_sample_index) * sample_time << " ns, Combined value: " << _combined_value;
                 }
 
@@ -378,6 +378,25 @@ int main(int argc, char **argv) {
     // Initialize mosaic topology for visualization
     std::string mapping_json_file = "config/mapping_Feb2026_re.json";
     MosaicTopoSetup mosaic_setup = initialize_mosaic_topology(fpga_count, mapping_json_file, FPGA_CHANNEL_NUMBER);
+    bool has_unmapped_tot_channels = false;
+    for (size_t channel = 0; channel < h1d_tot_channel_list.size(); ++channel) {
+        if (h1d_tot_channel_list[channel]->GetEntries() > 0 &&
+            mosaic_setup.topo_ped_median.chan2pad[channel] < 0) {
+            has_unmapped_tot_channels = true;
+            break;
+        }
+    }
+    if (has_unmapped_tot_channels) {
+        LOG(WARNING) << "Detector mapping omits populated combined/ToT channels; using readout-channel order for all mosaics";
+        auto& topology = mosaic_setup.topo_ped_median;
+        topology.NX = 12;
+        topology.NY = (FPGA_CHANNEL_NUMBER * fpga_count + topology.NX - 1) / topology.NX;
+        topology.reverse_row = false;
+        for (size_t channel = 0; channel < topology.chan2pad.size(); ++channel) {
+            topology.chan2pad[channel] = static_cast<int>(channel);
+        }
+        mosaic_setup.topo_wave = topology;
+    }
 
     // calculate the mean pedestal for each channel
     std::vector<double> channel_pedestal_mean_list;

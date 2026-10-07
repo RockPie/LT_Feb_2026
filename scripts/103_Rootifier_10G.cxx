@@ -241,6 +241,13 @@ int main(int argc, char **argv){
                         const int frame_size = 192;
                         const int lines_per_event = 4;
                         const int pool_window_size = lines_per_event * 4;
+                        auto frame_half_index = [](const std::string& frame) {
+                            const int asic = static_cast<unsigned char>(frame.at(2)) & 0x0F;
+                            const int half = static_cast<unsigned char>(frame.at(3)) - 0x24;
+                            if (asic == 0 && half >= 0 && half < 4) return half;
+                            if ((asic == 1 || asic == 2) && half >= 0 && half < 2) return 2 + half;
+                            return -1;
+                        };
                         while (_index_base + frame_size <= _index_end) {
                             
                             // move the pointer
@@ -315,11 +322,17 @@ int main(int argc, char **argv){
                                 }
                                 auto timestamp_ref = timestamp_pool.at(seed_index);
                                 auto fpga_id_ref = fpga_id_pool.at(seed_index);
+                                const int seed_half = frame_half_index(valid_line_pool.at(seed_index));
+                                if (seed_half < 0) {
+                                    line_matched_flags.at(seed_index) = true;
+                                    continue;
+                                }
+                                bool matched_halves[4] = {false, false, false, false};
+                                matched_halves[seed_half] = true;
 
                                 std::vector<int> match_line_index;
                                 match_line_index.reserve(lines_per_event);
                                 match_line_index.push_back(seed_index);
-                                line_matched_flags.at(seed_index) = true;
 
                                 int match_searching_end = seed_index + pool_window_size;
                                 if (match_searching_end > static_cast<int>(valid_line_pool.size())) {
@@ -329,15 +342,39 @@ int main(int argc, char **argv){
                                     if (line_matched_flags.at(search_index)) {
                                         continue;
                                     }
-                                    if (timestamp_pool.at(search_index) == timestamp_ref && fpga_id_pool.at(search_index) == fpga_id_ref) {
+                                    const int candidate_half = frame_half_index(valid_line_pool.at(search_index));
+                                    if (candidate_half < 0 || matched_halves[candidate_half] ||
+                                        fpga_id_pool.at(search_index) != fpga_id_ref) {
+                                        continue;
+                                    }
+                                    const auto candidate_timestamp = timestamp_pool.at(search_index);
+                                    bool compatible = true;
+                                    for (const int matched_index : match_line_index) {
+                                        const auto matched_timestamp = timestamp_pool.at(matched_index);
+                                        const auto difference = candidate_timestamp > matched_timestamp
+                                            ? candidate_timestamp - matched_timestamp : matched_timestamp - candidate_timestamp;
+                                        const int matched_half = frame_half_index(valid_line_pool.at(matched_index));
+                                        if (difference > 1 || (candidate_half / 2 == matched_half / 2 && difference != 0)) {
+                                            compatible = false;
+                                            break;
+                                        }
+                                    }
+                                    if (compatible) {
                                         match_line_index.push_back(search_index);
-                                        line_matched_flags.at(search_index) = true;
+                                        matched_halves[candidate_half] = true;
                                         if (static_cast<int>(match_line_index.size()) == lines_per_event) {
                                             break;
                                         }
                                     }
                                 }
                                 int matched_frame_count = static_cast<int>(match_line_index.size());
+                                if (matched_frame_count != lines_per_event &&
+                                    seed_index + pool_window_size > static_cast<int>(valid_line_pool.size())) {
+                                    continue;
+                                }
+                                for (const int matched_index : match_line_index) {
+                                    line_matched_flags.at(matched_index) = true;
+                                }
                                 if (matched_frame_count == lines_per_event) {
                                     counter_complete_20_lines += matched_frame_count;
                                     if (counter_complete_20_lines / lines_per_event >= script_n_events && script_n_events > 0) {
@@ -356,7 +393,7 @@ int main(int argc, char **argv){
                                         int fpga_id = ((unsigned char) matched_line.at(2) & 0xF0) >> 4;
                                         int asic_id = (unsigned char) matched_line.at(2) & 0x0F;
                                         int half_id = (unsigned char) matched_line.at(3);
-                                        int half_index = half_id - 0x24;
+                                        int half_index = frame_half_index(matched_line);
                                         if (half_index < 0 || half_index >= 4) {
                                             continue;
                                         }
@@ -364,7 +401,7 @@ int main(int argc, char **argv){
 
                                         if (asic_id == 0x00 && half_id == 0x24) {
                                             *branch_fpga_id = fpga_id;
-                                            *branch_timestamp = timestamp_ref;
+                                            *branch_timestamp = timestamp_pool.at(index);
                                             *branch_last_heartbeat = current_hear_beat_value;
                                         }
 

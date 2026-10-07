@@ -50,9 +50,9 @@ int main(int argc, char **argv) {
     }
 
     // std::vector<int> interested_channels = {68, 72, 62, 58, 54, 50, 46, 42, 74, 70, 64, 60, 52, 48, 44, 40, 71, 67 ,63, 59, 55, 49, 43, 39, 73, 69, 65, 61, 53, 51, 45, 41};
-    std::vector<int> interested_but_covered_channels = {54, 58};
+    std::vector<int> interested_but_covered_channels = {130, 134};
 
-    std::vector<int> interested_channels = {50};
+    std::vector<int> interested_channels = {126};
     // * --- Create the output file -----------------------------------------------------
     // * --------------------------------------------------------------------------------
     TFile *output_root = new TFile(opts.output_file.c_str(), "RECREATE");
@@ -616,6 +616,24 @@ int main(int argc, char **argv) {
     MosaicTopology topo_ped_median = topo_wave;
     topo_ped_median = topo_wave;
     topo_ped_median.th2_logz = true;
+    bool has_unmapped_adc_channels = false;
+    for (size_t channel = 0; channel < h2d_adc_channel_sample_list.size(); ++channel) {
+        if (h2d_adc_channel_sample_list[channel]->GetEntries() > 0 &&
+            topo_wave.chan2pad[channel] < 0) {
+            has_unmapped_adc_channels = true;
+            break;
+        }
+    }
+    if (has_unmapped_adc_channels) {
+        LOG(WARNING) << "Detector mapping omits populated ADC channels; using readout-channel order for all mosaics";
+        topo_wave.NX = 12;
+        topo_wave.NY = (TOTAL_CH + topo_wave.NX - 1) / topo_wave.NX;
+        topo_wave.reverse_row = false;
+        for (size_t channel = 0; channel < topo_wave.chan2pad.size(); ++channel) {
+            topo_wave.chan2pad[channel] = static_cast<int>(channel);
+        }
+        topo_ped_median = topo_wave;
+    }
 
     // save each of the channel sample histograms to the output root file's subdirectory
     output_root->mkdir("Channel_Samples");

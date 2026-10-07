@@ -59,14 +59,20 @@ int main(int argc, char **argv) {
     // std::vector<int> interested_channels = {68, 72, 62, 58, 54, 50, 46, 42, 74, 70, 64, 60, 52, 48, 44, 40, 71, 67 ,63, 59, 55, 49, 43, 39, 73, 69, 65, 61, 53, 51, 45, 41};
     
 
-    std::vector<int> interested_channels = {50, 52};
+    const std::vector<int>& interested_channels = CONFIGURABLE_EXAMPLE_CHANNELS;
+    for (int channel : interested_channels) {
+        if (channel < 0 || channel >= fpga_count * FPGA_CHANNEL_NUMBER) {
+            LOG(ERROR) << "Invalid raw interested channel " << channel;
+            return 1;
+        }
+    }
 
-    std::vector<int> interested_but_covered_channels = {54, 58};
+    // std::vector<int> interested_but_covered_channels = {54, 58};
 
-    const int pedestal_index_max = 1; // think the pedestal is stable, and the first two samples are enough to calculate the pedestal
-    const int peak_index_min = 5;
-    const int peak_index_max = 9; // the sample index of the signal peak should be within this range
-    const int first_toa_index_min = 2;
+    const int pedestal_index_max = 0; // think the pedestal is stable, and the first two samples are enough to calculate the pedestal
+    const int peak_index_min = 2;
+    const int peak_index_max = 7; // the sample index of the signal peak should be within this range
+    const int first_toa_index_min = 1;
     const int first_toa_index_max = 5; // the sample index of the first ToA should be within this range
 
     TFile *output_root = new TFile(opts.output_file.c_str(), "RECREATE");
@@ -191,6 +197,23 @@ int main(int argc, char **argv) {
         h2d_tot_vs_toa_channel->SetDirectory(nullptr);
         h2d_tot_vs_toa_channel_list.push_back(h2d_tot_vs_toa_channel);
     }
+
+    std::vector<TH2D*> h2d_tot_vs_adc_peak_sample_channel_list;
+    for (int _chn=0; _chn<FPGA_CHANNEL_NUMBER * fpga_count; _chn++) {
+        std::string hist_name = "h2d_tot_vs_adc_peak_sample_channel_" + std::to_string(_chn);
+        auto* h2d_tot_vs_adc_peak_sample_channel = new TH2D(
+            hist_name.c_str(),
+            ("ToT vs ADC peak sample for channel " + std::to_string(_chn)).c_str(),
+            tot_hist_bins,
+            tot_hist_min,
+            tot_hist_max,
+            256,
+            0,
+            1024
+        );
+        h2d_tot_vs_adc_peak_sample_channel->SetDirectory(nullptr);
+        h2d_tot_vs_adc_peak_sample_channel_list.push_back(h2d_tot_vs_adc_peak_sample_channel);
+    }
     
     std::vector<double> channel_valid_tot_count_list(FPGA_CHANNEL_NUMBER * fpga_count, 0.0); // to count the number of events with valid ToT for each channel, which will decide whether to use tot for max searching
     std::vector<std::vector<double>> channel_adc_peak_sample_values_list(FPGA_CHANNEL_NUMBER * fpga_count);
@@ -299,6 +322,8 @@ int main(int argc, char **argv) {
                     }
                 }
 
+                double _adc_average = std::accumulate(_adc_samples.begin(), _adc_samples.end(), 0.0) / _adc_samples.size();
+
                 channel_adc_peak_sample_values_list[_fpga_index * FPGA_CHANNEL_NUMBER + _channel_index].push_back(_adc_peak_limited);
 
                 if (_tot_first > 0.0) {
@@ -317,6 +342,7 @@ int main(int argc, char **argv) {
                         }
                         h2d_tot_vs_toa_channel_list[_fpga_index * FPGA_CHANNEL_NUMBER + _channel_index]->Fill(_tot_decoded, _toa_ns);
                     }
+                    h2d_tot_vs_adc_peak_sample_channel_list[_fpga_index * FPGA_CHANNEL_NUMBER + _channel_index]->Fill(_tot_decoded, _adc_average);
                 }
 
             } // channel loop
@@ -331,8 +357,9 @@ int main(int argc, char **argv) {
     LOG(INFO) << "Hamming code error: " << hamming_error_entries << " (" << (float)hamming_error_entries / processed_entries * 100 << "%)";
     // print the tot valid ratio for each example channel
     for (int _chn : interested_channels) {
+        const int display_channel = _chn;
         double tot_valid_ratio = channel_valid_tot_count_list[_chn] / processed_entries;
-        LOG(INFO) << "Channel " << _chn << " ToT valid ratio: " << tot_valid_ratio * 100 << "%";
+        LOG(INFO) << "Channel " << display_channel << " ToT valid ratio: " << tot_valid_ratio * 100 << "%";
     }
 
     input_root->Close();
@@ -340,6 +367,25 @@ int main(int argc, char **argv) {
     // Initialize mosaic topology for visualization
     std::string mapping_json_file = "config/mapping_Feb2026_re.json";
     MosaicTopoSetup mosaic_setup = initialize_mosaic_topology(fpga_count, mapping_json_file, FPGA_CHANNEL_NUMBER);
+    bool has_unmapped_tot_channels = false;
+    for (size_t channel = 0; channel < h1d_tot_channel_list.size(); ++channel) {
+        if (h1d_tot_channel_list[channel]->GetEntries() > 0 &&
+            mosaic_setup.topo_ped_median.chan2pad[channel] < 0) {
+            has_unmapped_tot_channels = true;
+            break;
+        }
+    }
+    if (has_unmapped_tot_channels) {
+        LOG(WARNING) << "Detector mapping omits populated ToT channels; using readout-channel order for all mosaics";
+        auto& topology = mosaic_setup.topo_ped_median;
+        topology.NX = 12;
+        topology.NY = (FPGA_CHANNEL_NUMBER * fpga_count + topology.NX - 1) / topology.NX;
+        topology.reverse_row = false;
+        for (size_t channel = 0; channel < topology.chan2pad.size(); ++channel) {
+            topology.chan2pad[channel] = static_cast<int>(channel);
+        }
+        mosaic_setup.topo_wave = topology;
+    }
 
     // calculate the mean pedestal for each channel
     std::vector<double> channel_pedestal_mean_list;
@@ -371,15 +417,67 @@ int main(int argc, char **argv) {
     canvas_channel_tot_vs_toa->Write();
     canvas_channel_tot_vs_toa->Close();
 
+    auto canvas_channel_tot_vs_adc_peak_sample = new TCanvas("canvas_channel_tot_vs_adc_peak_sample", "ToT vs ADC peak sample for all channels", 1200, 800);
+    draw_mosaic_fixed(*canvas_channel_tot_vs_adc_peak_sample, h2d_tot_vs_adc_peak_sample_channel_list, mosaic_setup.topo_ped_median);
+    canvas_channel_tot_vs_adc_peak_sample->Modified();
+    canvas_channel_tot_vs_adc_peak_sample->Update();
+    canvas_channel_tot_vs_adc_peak_sample->Write();
+    canvas_channel_tot_vs_adc_peak_sample->Close();
+
     TDirectory *dir_channel = output_root->mkdir("Interested_Channels");
     dir_channel->cd();
     for (int _chn : interested_channels) {
-        // save the tot distribution histogram for this channel
-        auto canvas_tot_distribution = new TCanvas(("canvas_tot_distribution_channel_" + std::to_string(_chn)).c_str(), ("ToT distribution for channel " + std::to_string(_chn)).c_str(), 800, 600);
-        h1d_tot_channel_list[_chn]->Draw();
+        const int display_channel = _chn;
+        auto canvas_tot_distribution = new TCanvas(("canvas_tot_distribution_channel_" + std::to_string(display_channel)).c_str(), ("ToT distribution for channel " + std::to_string(display_channel)).c_str(), 1000, 700);
+        canvas_tot_distribution->SetLeftMargin(0.12);
+        canvas_tot_distribution->SetRightMargin(0.04);
+        canvas_tot_distribution->SetBottomMargin(0.12);
+
+        auto* tot_histogram = h1d_tot_channel_list[_chn];
+        tot_histogram->SetTitle("");
+        tot_histogram->SetStats(kFALSE);
+        tot_histogram->SetLineColor(kBlue + 1);
+        tot_histogram->SetLineWidth(2);
+        tot_histogram->GetXaxis()->SetTitle("ToT");
+        tot_histogram->GetYaxis()->SetTitle("Entries");
+        tot_histogram->GetXaxis()->SetRangeUser(0, 4096);
+        tot_histogram->GetXaxis()->SetNdivisions(8, kFALSE);
+        tot_histogram->GetXaxis()->SetTitleSize(0.045);
+        tot_histogram->GetYaxis()->SetTitleSize(0.045);
+        tot_histogram->GetXaxis()->SetLabelSize(0.04);
+        tot_histogram->GetYaxis()->SetLabelSize(0.04);
+        tot_histogram->GetYaxis()->SetTitleOffset(1.2);
+        tot_histogram->Draw("hist");
+
+        const double valid_tot_count = channel_valid_tot_count_list[_chn];
+        const double valid_tot_percentage = processed_entries > 0
+            ? valid_tot_count / processed_entries * 100.0
+            : 0.0;
+        std::ostringstream valid_tot_label;
+        valid_tot_label << "Valid ToT: " << static_cast<long long>(valid_tot_count)
+                        << " (" << std::fixed << std::setprecision(1)
+                        << valid_tot_percentage << "%)";
+
+        TLatex latex;
+        latex.SetNDC();
+        latex.SetTextAlign(13);
+        latex.SetTextFont(62);
+        latex.SetTextSize(0.04);
+        latex.DrawLatex(0.15, 0.88, "Laser Test with H2GCROC");
+        latex.SetTextFont(42);
+        latex.SetTextSize(0.03);
+        latex.DrawLatex(0.15, 0.84, run_info_str.c_str());
+        latex.DrawLatex(0.15, 0.80, ("Channel " + std::to_string(display_channel)).c_str());
+        latex.DrawLatex(0.15, 0.76, ("Processed events: " + std::to_string(processed_entries)).c_str());
+        latex.DrawLatex(0.15, 0.72, valid_tot_label.str().c_str());
+        latex.DrawLatex(0.15, 0.68, "CERN, September 2026");
+
         canvas_tot_distribution->Modified();
         canvas_tot_distribution->Update();
         canvas_tot_distribution->Write();
+        canvas_tot_distribution->SaveAs(
+            (opts.output_file + "_tot_distribution_channel_"
+             + std::to_string(display_channel) + ".pdf").c_str());
         canvas_tot_distribution->Close();
     }
 

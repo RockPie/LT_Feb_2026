@@ -129,6 +129,33 @@ static void ExtractSortedXY(const TGraphErrors& g,
     }
 }
 
+static void ExtractSortedXY(const TGraph& g,
+                            std::vector<double>& xs,
+                            std::vector<double>& ys,
+                            std::vector<double>& exs,
+                            std::vector<double>& eys) {
+    const int n = g.GetN();
+    xs.resize(n);
+    ys.resize(n);
+    exs.assign(n, 0.0);
+    eys.assign(n, 0.0);
+
+    for (int i = 0; i < n; i++) {
+        g.GetPoint(i, xs[i], ys[i]);
+    }
+
+    std::vector<int> indices(n);
+    for (int i = 0; i < n; i++) indices[i] = i;
+    std::sort(indices.begin(), indices.end(), [&](int a, int b){ return xs[a] < xs[b]; });
+
+    auto original_xs = xs;
+    auto original_ys = ys;
+    for (int i = 0; i < n; i++) {
+        xs[i] = original_xs[indices[i]];
+        ys[i] = original_ys[indices[i]];
+    }
+}
+
 // Detect a “pit” interval in ToT(L): find first significant decrease, then end when it recovers above previous max.
 // epsTot is in ToT units; tune if needed.
 static bool DetectTotPitInterval(const std::vector<double>& L,
@@ -183,7 +210,7 @@ static bool DetectTotPitInterval(const std::vector<double>& L,
 //
 TotToAdcBuildResult BuildTotToAdcLUT_FromGraphs(
     const TGraphErrors* gAdcVsLaser,
-    const TGraphErrors* gTotVsLaser,
+    const TGraph* gTotVsLaser,
     int tot_bins = 4096,
     double adc_lin_min = 150.0,            // RAW ADC range used to select linear region
     double adc_lin_max = 950.0,            // RAW ADC range used to select linear region

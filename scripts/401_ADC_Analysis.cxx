@@ -1,11 +1,14 @@
 #include "H2GCROC_Common.hxx"
+#include "TProfile.h"
 #include "H2GCROC_Lib.hxx"
+#include "H2GCROC_ToAThresholdScan.hxx"
 
 #include "TH2D.h"
 #include "TH1D.h"
 #include "TAxis.h"
 #include "TString.h"
 #include "TObject.h"
+#include "TNamed.h"
 #include <limits>
 
 INITIALIZE_EASYLOGGINGPP
@@ -59,14 +62,20 @@ int main(int argc, char **argv) {
     // std::vector<int> interested_channels = {68, 72, 62, 58, 54, 50, 46, 42, 74, 70, 64, 60, 52, 48, 44, 40, 71, 67 ,63, 59, 55, 49, 43, 39, 73, 69, 65, 61, 53, 51, 45, 41};
     
 
-    std::vector<int> interested_channels = {50, 52};
+    const std::vector<int>& interested_channels = CONFIGURABLE_EXAMPLE_CHANNELS;
+    for (int channel : interested_channels) {
+        if (channel < 0 || channel >= fpga_count * FPGA_CHANNEL_NUMBER) {
+            LOG(ERROR) << "Invalid raw interested channel " << channel;
+            return 1;
+        }
+    }
 
-    std::vector<int> interested_but_covered_channels = {54, 58};
+    // std::vector<int> interested_but_covered_channels = {54, 58};
 
-    const int pedestal_index_max = 1; // think the pedestal is stable, and the first two samples are enough to calculate the pedestal
-    const int peak_index_min = 5;
-    const int peak_index_max = 9; // the sample index of the signal peak should be within this range
-    const int first_toa_index_min = 2;
+    const int pedestal_index_max = 0; // think the pedestal is stable, and the first two samples are enough to calculate the pedestal
+    const int peak_index_min = 2;
+    const int peak_index_max = 5; // the sample index of the signal peak should be within this range
+    const int first_toa_index_min = 1;
     const int first_toa_index_max = 5; // the sample index of the first ToA should be within this range
 
     TFile *output_root = new TFile(opts.output_file.c_str(), "RECREATE");
@@ -127,9 +136,11 @@ int main(int argc, char **argv) {
     const double adc_hist_min = 0.0;
     const double adc_hist_max = 1024.0;
     const int adc_hist_bins = 1024;
+    const int adc_2d_hist_bins = 256;
 
-    const double toa_peak_window_min = 115.0; // unit: ns
-    const double toa_peak_window_max = 125.0; // unit: ns
+    const double toa_peak_window_width = 10.0; // unit: ns
+    double toa_peak_window_min = 0.0;
+    double toa_peak_window_max = toa_peak_window_width;
 
     const double toa_ns_hist_min = 0.0;
     const double toa_ns_hist_max = machine_gun_samples * sample_time;
@@ -213,7 +224,7 @@ int main(int argc, char **argv) {
         auto *h1d_adc_peak_limited_toa_filtered_minus_pedestal_channel = new TH1D(
             hist_name.c_str(),
             ("ADC Peak (Limited to Index " + std::to_string(peak_index_max) + ") with ToA in [" + std::to_string(toa_peak_window_min) + ", " + std::to_string(toa_peak_window_max) + "] ns Minus Pedestal for Channel " + std::to_string(_chn) + ";ADC Peak - Pedestal;Count").c_str(),
-            adc_hist_bins,
+            adc_2d_hist_bins,
             adc_hist_min,
             adc_hist_max
         );
@@ -231,7 +242,7 @@ int main(int argc, char **argv) {
             toa_ns_hist_bins,
             toa_ns_hist_min,
             toa_ns_hist_max,
-            adc_hist_bins,
+            adc_2d_hist_bins,
             adc_hist_min,
             adc_hist_max
         );
@@ -241,6 +252,7 @@ int main(int argc, char **argv) {
 
     // th2d for toa shifted adc waveform for each channel
     std::vector<TH2D*> h2d_toa_shifted_adc_waveform_channel_list;
+    std::vector<TH2D*> h2d_toa_shifted_adc_signal_waveform_channel_list;
     for (int _chn=0; _chn<FPGA_CHANNEL_NUMBER * fpga_count; _chn++) {
         std::string hist_name = "h2d_toa_shifted_adc_waveform_channel_" + std::to_string(_chn);
         auto *h2d_toa_shifted_adc_waveform_channel = new TH2D(
@@ -249,12 +261,26 @@ int main(int argc, char **argv) {
             toa_shifted_ns_hist_bins,
             toa_shifted_ns_hist_min,
             toa_shifted_ns_hist_max,
-            adc_hist_bins,
+            adc_2d_hist_bins,
             adc_hist_min,
             adc_hist_max
         );
         h2d_toa_shifted_adc_waveform_channel->SetDirectory(nullptr);
         h2d_toa_shifted_adc_waveform_channel_list.push_back(h2d_toa_shifted_adc_waveform_channel);
+
+        std::string signal_hist_name = "h2d_toa_shifted_adc_signal_waveform_channel_" + std::to_string(_chn);
+        auto *h2d_toa_shifted_adc_signal_waveform_channel = new TH2D(
+            signal_hist_name.c_str(),
+            ("Pedestal-Free ToA Shifted ADC Waveform for Channel " + std::to_string(_chn) + ";Sample Index Shifted by ToA;ADC").c_str(),
+            toa_shifted_ns_hist_bins,
+            toa_shifted_ns_hist_min,
+            toa_shifted_ns_hist_max,
+            adc_2d_hist_bins,
+            adc_hist_min,
+            adc_hist_max
+        );
+        h2d_toa_shifted_adc_signal_waveform_channel->SetDirectory(nullptr);
+        h2d_toa_shifted_adc_signal_waveform_channel_list.push_back(h2d_toa_shifted_adc_signal_waveform_channel);
     }
 
     // adc max v.s. adc average correlation for each channel
@@ -264,10 +290,10 @@ int main(int argc, char **argv) {
         auto *h2d_adc_peak_limited_v_adc_average_channel = new TH2D(
             hist_name.c_str(),
             ("Correlation between ADC Peak (Limited to Index " + std::to_string(peak_index_max) + ") and ADC Average for Channel " + std::to_string(_chn) + ";ADC Average;ADC Peak").c_str(),
-            adc_hist_bins,
+            adc_2d_hist_bins,
             adc_hist_min,
             adc_hist_max,
-            adc_hist_bins,
+            adc_2d_hist_bins,
             adc_hist_min,
             adc_hist_max
         );
@@ -303,9 +329,199 @@ int main(int argc, char **argv) {
     int adc_averaging_sample_start_index = 0;
     int adc_averaging_sample_end_index = 15;
 
+    h2g_toa::Config toa_scan_config;
+    toa_scan_config.firstSample = first_toa_index_min;
+    toa_scan_config.lastSample = first_toa_index_max;
+    toa_scan_config.sampleNs = sample_time;
+    toa_scan_config.lsbNs = 0.025;
+    toa_scan_config.binWidthTicks = 10;     // 0.25 ns
+    toa_scan_config.smoothSigmaNs = 1.0;    // same smoothing for ALL thresholds/channels
+    toa_scan_config.lowStatsEntries = 200;  // warning only, NOT a selection cut
+
+    if (fpga_count <= 0 || entry_max <= 0 ||
+        toa_scan_config.firstSample < 0 ||
+        toa_scan_config.lastSample < toa_scan_config.firstSample ||
+        toa_scan_config.lastSample >= machine_gun_samples) {
+        LOG(ERROR) << "Invalid metadata or first-ToA sample range";
+        return 1;
+    }
+
+    const int toa_scan_channel_count = FPGA_CHANNEL_NUMBER * fpga_count;
+    std::vector<int> toa_threshold_by_channel(toa_scan_channel_count, -1);
+
+    try {
+        std::vector<h2g_toa::Counts> counts;
+        counts.reserve(toa_scan_channel_count);
+        for (int ch = 0; ch < toa_scan_channel_count; ++ch)
+            counts.emplace_back(first_toa_index_min, first_toa_index_max);
+
+        Long64_t calibration_accepted_events = 0;
+        for (Long64_t entry = 0; entry < entry_max; ++entry) {
+            if (input_tree->GetEntry(entry) <= 0)
+                throw std::runtime_error("Failed to read calibration entry " + std::to_string(entry));
+            if (entry % 5000 == 0)
+                LOG(INFO) << "ToA calibration entry " << entry << " / " << entry_max;
+            // Validate the whole event BEFORE accumulating any FPGA/channel.
+            if (skip_hamming_error_entries &&
+                !h2g_toa::passesHamming(branch_daqh_list_list, machine_gun_samples))
+                continue;
+            ++calibration_accepted_events;
+
+            for (int fpga = 0; fpga < fpga_count; ++fpga) {
+                const UInt_t* values = branch_val2_list_list[fpga];
+                for (int local = 0; local < FPGA_CHANNEL_NUMBER; ++local) {
+                    if (get_valid_fpga_channel(local) == -1) continue;
+                    const int ch = fpga * FPGA_CHANNEL_NUMBER + local;
+                    // Identical first-nonzero-ToA rule to the original event loop.
+                    for (int sample = first_toa_index_min; sample <= first_toa_index_max; ++sample) {
+                        const int raw = static_cast<int>(
+                            values[local + sample * FPGA_CHANNEL_NUMBER] & 0x3FFu);
+                        if (raw != 0) {
+                            counts[ch].add(sample, raw);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        LOG(INFO) << "ToA calibration accepted events: " << calibration_accepted_events;
+
+        TDirectory* scan_dir = output_root->GetDirectory("ToA_Threshold_Scan");
+        if (!scan_dir) scan_dir = output_root->mkdir("ToA_Threshold_Scan");
+        if (!scan_dir) throw std::runtime_error("Cannot create ToA_Threshold_Scan");
+        TDirectory::TContext scan_context(scan_dir);
+
+        TH1D h_thresholds("best_threshold_by_channel",
+            "Selected ToA threshold (-1 = unavailable);Global channel;Threshold code",
+            toa_scan_channel_count, -0.5, toa_scan_channel_count - 0.5);
+        TH1D h_valid_counts("calibration_toa_count_by_channel",
+            "Valid first-ToA counts;Global channel;Valid ToA events",
+            toa_scan_channel_count, -0.5, toa_scan_channel_count - 0.5);
+        h_thresholds.SetDirectory(nullptr); h_thresholds.SetStats(kFALSE);
+        h_valid_counts.SetDirectory(nullptr); h_valid_counts.SetStats(kFALSE);
+
+        // Every valid channel is scanned and plotted in the ROOT file.
+        // Only interested_channels additionally get three standalone PDF figures.
+        const bool export_pdf_for_all_channels = false;
+        for (int ch = 0; ch < toa_scan_channel_count; ++ch) {
+            h_thresholds.SetBinContent(ch + 1, -1);
+            h_thresholds.SetBinError(ch + 1, 0.0);
+            if (get_valid_fpga_channel(ch % FPGA_CHANNEL_NUMBER) == -1) continue;
+
+            const bool export_pdf = export_pdf_for_all_channels ||
+                std::find(interested_channels.begin(), interested_channels.end(), ch)
+                    != interested_channels.end();
+            const std::string prefix = export_pdf
+                ? opts.output_file + "_toa_scan_channel_" + std::to_string(ch)
+                : std::string();
+            const h2g_toa::Result result = h2g_toa::scanAndWrite(
+                counts[ch], toa_scan_config, *scan_dir, ch, prefix);
+            toa_threshold_by_channel[ch] = result.threshold;
+            h_thresholds.SetBinContent(ch + 1, result.threshold);
+            h_thresholds.SetBinError(ch + 1, 0.0);
+            h_valid_counts.SetBinContent(ch + 1, static_cast<double>(result.entries));
+            h_valid_counts.SetBinError(ch + 1, std::sqrt(static_cast<double>(result.entries)));
+
+            LOG(INFO) << "ToA channel " << ch << ": threshold=" << result.threshold
+                    << ", N=" << result.entries << ", score=" << result.chosenScore
+                    << ", minimum plateau=[" << result.plateauFirst << ","
+                    << result.plateauLast << "], equivalent minima=" << result.equivalentMinima;
+            if (result.entries == 0) {
+                LOG(WARNING) << "Channel " << ch << ": no valid ToA; threshold unavailable";
+            } else {
+                if (result.lowStatistics)
+                    LOG(WARNING) << "Channel " << ch << ": low-statistics threshold estimate";
+                if (result.allThresholdsEquivalent)
+                    LOG(WARNING) << "Channel " << ch << ": smoothness cannot identify a threshold; "
+                                << "all candidates are equivalent. The plateau midpoint is only a tie-break.";
+            }
+        }
+        if (h_thresholds.Write() <= 0 || h_valid_counts.Write() <= 0)
+            throw std::runtime_error("Cannot write ToA scan summary");
+    } catch (const std::exception& error) {
+        LOG(ERROR) << "ToA threshold calibration failed: " << error.what();
+        return 1;
+    }
+
+    std::vector<double> first_toa_ns_values;
+    for (Long64_t entry = 0; entry < entry_max; ++entry) {
+        if (input_tree->GetEntry(entry) <= 0) {
+            LOG(ERROR) << "Failed to read ToA window entry " << entry;
+            return 1;
+        }
+        if (skip_hamming_error_entries &&
+            !h2g_toa::passesHamming(branch_daqh_list_list, machine_gun_samples)) {
+            continue;
+        }
+        for (int fpga = 0; fpga < fpga_count; ++fpga) {
+            const UInt_t* values = branch_val2_list_list[fpga];
+            for (int local = 0; local < FPGA_CHANNEL_NUMBER; ++local) {
+                if (get_valid_fpga_channel(local) == -1) continue;
+                const int global_channel = fpga * FPGA_CHANNEL_NUMBER + local;
+                for (int sample = first_toa_index_min; sample <= first_toa_index_max; ++sample) {
+                    const int raw = static_cast<int>(
+                        values[local + sample * FPGA_CHANNEL_NUMBER] & 0x3FFu);
+                    if (raw != 0) {
+                        first_toa_ns_values.push_back(h2g_toa::correctedNs(
+                            sample, raw, toa_threshold_by_channel[global_channel], toa_scan_config));
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    const bool has_toa_peak_window = !first_toa_ns_values.empty();
+    if (!has_toa_peak_window) {
+        LOG(WARNING) << "No valid first-ToA values found for peak-window selection; "
+                     << "continuing ADC analysis with ToA-dependent results unavailable";
+    } else {
+        std::sort(first_toa_ns_values.begin(), first_toa_ns_values.end());
+        size_t window_end = 0;
+        size_t best_window_begin = 0;
+        size_t best_window_end = 0;
+        for (size_t window_begin = 0; window_begin < first_toa_ns_values.size(); ++window_begin) {
+            while (window_end < first_toa_ns_values.size() &&
+                   first_toa_ns_values[window_end] <= first_toa_ns_values[window_begin] + toa_peak_window_width) {
+                ++window_end;
+            }
+            if (window_end - window_begin > best_window_end - best_window_begin) {
+                best_window_begin = window_begin;
+                best_window_end = window_end;
+            }
+        }
+        toa_peak_window_min = first_toa_ns_values[best_window_begin];
+        toa_peak_window_max = toa_peak_window_min + toa_peak_window_width;
+        LOG(INFO) << "Selected ToA peak window: [" << toa_peak_window_min << ", "
+                  << toa_peak_window_max << "] ns with "
+                  << best_window_end - best_window_begin << " first-ToA values";
+    }
+    output_root->cd();
+
+    const std::string toa_window_description = has_toa_peak_window
+        ? "ToA in [" + std::to_string(toa_peak_window_min) + ", " +
+          std::to_string(toa_peak_window_max) + "] ns"
+        : "ToA window unavailable (no valid first-ToA)";
+    TNamed toa_window_status("ADC_ToA_peak_window_status", toa_window_description.c_str());
+    toa_window_status.Write();
+    for (size_t channel = 0; channel < h1d_adc_peak_limited_toa_filtered_minus_pedestal_channel_list.size(); ++channel) {
+        h1d_adc_peak_limited_toa_filtered_minus_pedestal_channel_list[channel]->SetTitle(
+            ("ADC Peak (Limited to Index " + std::to_string(peak_index_max) + ") with " +
+             toa_window_description + " Minus Pedestal for Channel " + std::to_string(channel) +
+             ";ADC Peak - Pedestal;Count").c_str());
+    }
+
     for (int _entry = 0; _entry < entry_max; _entry++) {
-        input_tree->GetEntry(_entry);
+        // input_tree->GetEntry(_entry);
+        if (input_tree->GetEntry(_entry) <= 0) {
+            LOG(ERROR) << "Failed to read entry " << _entry;
+            return 1;
+        }
         processed_entries++;
+        if (skip_hamming_error_entries && !h2g_toa::passesHamming(branch_daqh_list_list, machine_gun_samples)) {
+            hamming_error_entries++;
+            continue;
+        }
+
         if (_entry % 5000 == 0) {
             LOG(INFO) << "Processing entry " << _entry << " / " << entry_max;
         }
@@ -410,16 +626,29 @@ int main(int argc, char **argv) {
                 h2d_adc_peak_limited_v_adc_average_channel_list[_fpga_index * FPGA_CHANNEL_NUMBER + _channel_index]->Fill(_adc_average_minus_pedestal, _adc_peak_limited_minus_pedestal);
 
                 if (_toa_first != 0) {
-                    double _toa_first_ns = static_cast<double>(_toa_first) * 0.025 + static_cast<double>(_toa_first_sample_index) * sample_time; // convert ToA to ns, and add the time of the first sample index
-                    if (_toa_first >= 268){
-                        _toa_first_ns -= 25.0;
-                    }
+                    // double _toa_first_ns = static_cast<double>(_toa_first) * 0.025 + static_cast<double>(_toa_first_sample_index) * sample_time; // convert ToA to ns, and add the time of the first sample index
+                    // if (_toa_first >= 268) {
+                    //     _toa_first_ns -= 25.0;
+                    // }
+
+                    const int global_channel =_fpga_index * FPGA_CHANNEL_NUMBER + _channel_index;
+
+                    const int toa_threshold = toa_threshold_by_channel[global_channel];
+
+                    double _toa_first_ns = h2g_toa::correctedNs(
+                        _toa_first_sample_index,
+                        _toa_first,
+                        toa_threshold,
+                        toa_scan_config);
                     h2d_adc_peak_limited_v_toa_channel_list[_fpga_index * FPGA_CHANNEL_NUMBER + _channel_index]->Fill(_toa_first_ns, _adc_peak_limited);
                     for (int _sample_index = 0; _sample_index < machine_gun_samples; _sample_index++) {
                         double _sample_index_shifted_by_toa = static_cast<double>(_sample_index*sample_time) - _toa_first_ns+75.0; // shift the sample index by the ToA, and add 75 ns to make the shifted sample index positive
                         h2d_toa_shifted_adc_waveform_channel_list[_fpga_index * FPGA_CHANNEL_NUMBER + _channel_index]->Fill(_sample_index_shifted_by_toa, _adc_samples[_sample_index]);
+                        if (_sample_index > pedestal_index_max) {
+                            h2d_toa_shifted_adc_signal_waveform_channel_list[_fpga_index * FPGA_CHANNEL_NUMBER + _channel_index]->Fill(_sample_index_shifted_by_toa, _adc_samples[_sample_index]);
+                        }
                     }
-                    if (_toa_first_ns >= toa_peak_window_min && _toa_first_ns <= toa_peak_window_max) {
+                    if (has_toa_peak_window && _toa_first_ns >= toa_peak_window_min && _toa_first_ns <= toa_peak_window_max) {
                         double _adc_peak_limited_toa_filtered_minus_pedestal = _adc_peak_limited_minus_pedestal;
                         h1d_adc_peak_limited_toa_filtered_minus_pedestal_channel_list[_fpga_index * FPGA_CHANNEL_NUMBER + _channel_index]->Fill(_adc_peak_limited_toa_filtered_minus_pedestal);
                     }
@@ -437,8 +666,9 @@ int main(int argc, char **argv) {
     LOG(INFO) << "Hamming code error: " << hamming_error_entries << " (" << (float)hamming_error_entries / processed_entries * 100 << "%)";
     // print the valid toa ratio for example channels
     for (int _channel : interested_channels) {
+        const int _display_channel = _channel;
         double valid_toa_ratio = channel_valid_toa_count_list[_channel] / processed_entries;
-        LOG(INFO) << "Channel " << _channel << " valid ToA ratio: " << valid_toa_ratio * 100 << "%";
+        LOG(INFO) << "Channel " << _display_channel << " valid ToA ratio: " << valid_toa_ratio * 100 << "%";
     }
 
     input_root->Close();
@@ -446,6 +676,25 @@ int main(int argc, char **argv) {
     // Initialize mosaic topology for visualization
     std::string mapping_json_file = "config/mapping_Feb2026_re.json";
     MosaicTopoSetup mosaic_setup = initialize_mosaic_topology(fpga_count, mapping_json_file, FPGA_CHANNEL_NUMBER);
+    bool has_unmapped_adc_channels = false;
+    for (size_t channel = 0; channel < h2d_adc_samples_channel_list.size(); ++channel) {
+        if (h2d_adc_samples_channel_list[channel]->GetEntries() > 0 &&
+            mosaic_setup.topo_ped_median.chan2pad[channel] < 0) {
+            has_unmapped_adc_channels = true;
+            break;
+        }
+    }
+    if (has_unmapped_adc_channels) {
+        LOG(WARNING) << "Detector mapping omits populated ADC channels; using readout-channel order for all mosaics";
+        auto& topology = mosaic_setup.topo_ped_median;
+        topology.NX = 12;
+        topology.NY = (FPGA_CHANNEL_NUMBER * fpga_count + topology.NX - 1) / topology.NX;
+        topology.reverse_row = false;
+        for (size_t channel = 0; channel < topology.chan2pad.size(); ++channel) {
+            topology.chan2pad[channel] = static_cast<int>(channel);
+        }
+        mosaic_setup.topo_wave = topology;
+    }
 
     // calculate the mean pedestal for each channel
     std::vector<double> channel_pedestal_mean_list;
@@ -468,8 +717,46 @@ int main(int argc, char **argv) {
     canvas_adc_samples->Update();
     canvas_adc_samples->Write();
 
+    auto canvas_adc_samples_all_channels = new TCanvas("canvas_adc_samples_all_channels", "ADC Samples - All Readout Channels", 1600, 1200);
+    const int adc_canvas_columns = 16;
+    const int adc_canvas_rows = (FPGA_CHANNEL_NUMBER * fpga_count + adc_canvas_columns - 1) / adc_canvas_columns;
+    canvas_adc_samples_all_channels->Divide(adc_canvas_columns, adc_canvas_rows);
+    auto adc_samples_directory = output_root->mkdir("ADC_Samples");
+    for (size_t channel = 0; channel < h2d_adc_samples_channel_list.size(); ++channel) {
+        auto histogram = h2d_adc_samples_channel_list[channel];
+        canvas_adc_samples_all_channels->cd(static_cast<int>(channel) + 1)->SetLogz();
+        histogram->SetStats(false);
+        histogram->Draw("COLZ");
+        if (histogram->GetEntries() > 0) {
+            auto mean_trace = histogram->ProfileX((std::string(histogram->GetName()) + "_mean").c_str());
+            mean_trace->SetDirectory(nullptr);
+            mean_trace->SetLineColor(kRed + 1);
+            mean_trace->SetLineWidth(2);
+            mean_trace->DrawCopy("HIST L SAME");
+            delete mean_trace;
+        }
+        adc_samples_directory->cd();
+        histogram->Write();
+    }
+    output_root->cd();
+    canvas_adc_samples_all_channels->Modified();
+    canvas_adc_samples_all_channels->Update();
+    canvas_adc_samples_all_channels->Write();
+
     auto canvas_adc_peak_limited_v_adc_average = new TCanvas("canvas_adc_peak_limited_v_adc_average", ("Correlation between ADC Peak (Limited to Sample Index " + std::to_string(peak_index_max) + ") and ADC Average;Channel;Correlation").c_str(), 1200, 800);
-    draw_mosaic_fixed(*canvas_adc_peak_limited_v_adc_average, h2d_adc_peak_limited_v_adc_average_channel_list, mosaic_setup.topo_ped_median);
+    std::vector<TH2D*> adc_peak_average_overview;
+    auto adc_peak_average_directory = output_root->mkdir("ADC_Peak_Average");
+    for (size_t channel = 0; channel < h2d_adc_peak_limited_v_adc_average_channel_list.size(); ++channel) {
+        auto histogram = h2d_adc_peak_limited_v_adc_average_channel_list[channel];
+        adc_peak_average_directory->cd();
+        histogram->Write();
+        auto overview = static_cast<TH2D*>(histogram->Rebin2D(4, 4,
+            ("adc_peak_average_overview_channel_" + std::to_string(channel)).c_str()));
+        overview->SetDirectory(nullptr);
+        adc_peak_average_overview.push_back(overview);
+    }
+    output_root->cd();
+    draw_mosaic_fixed(*canvas_adc_peak_limited_v_adc_average, adc_peak_average_overview, mosaic_setup.topo_ped_median);
     canvas_adc_peak_limited_v_adc_average->Modified();
     canvas_adc_peak_limited_v_adc_average->Update();
     canvas_adc_peak_limited_v_adc_average->Write();
@@ -498,7 +785,7 @@ int main(int argc, char **argv) {
     canvas_toa_shifted_adc_waveform->Update();
     canvas_toa_shifted_adc_waveform->Write();
 
-    auto canvas_adc_peak_limited_toa_filtered_minus_pedestal = new TCanvas("canvas_adc_peak_limited_toa_filtered_minus_pedestal", ("ADC Peak (Limited to Sample Index " + std::to_string(peak_index_max) + ") with ToA in [" + std::to_string(toa_peak_window_min) + ", " + std::to_string(toa_peak_window_max) + "] ns Minus Pedestal;Channel;ADC Peak - Pedestal").c_str(), 1200, 800);
+    auto canvas_adc_peak_limited_toa_filtered_minus_pedestal = new TCanvas("canvas_adc_peak_limited_toa_filtered_minus_pedestal", ("ADC Peak (Limited to Sample Index " + std::to_string(peak_index_max) + ") with " + toa_window_description + " Minus Pedestal;Channel;ADC Peak - Pedestal").c_str(), 1200, 800);
     draw_mosaic_fixed(*canvas_adc_peak_limited_toa_filtered_minus_pedestal, h1d_adc_peak_limited_toa_filtered_minus_pedestal_channel_list, mosaic_setup.topo_ped_median);
     canvas_adc_peak_limited_toa_filtered_minus_pedestal->Modified();
     canvas_adc_peak_limited_toa_filtered_minus_pedestal->Update();
@@ -514,13 +801,14 @@ int main(int argc, char **argv) {
     TDirectory* dir_interested = output_root->mkdir("Interested_Channels");
     dir_interested->cd();
     for (int _channel : interested_channels) {
+        const int _display_channel = _channel;
         if (_channel < 0 || _channel >= FPGA_CHANNEL_NUMBER * fpga_count) {
-            LOG(WARNING) << "Interested but covered channel " << _channel << " is out of range, skipping";
+            LOG(WARNING) << "Interested channel " << _display_channel << " is out of range, skipping";
             continue;
         }
 
         // draw the unfiltered ADC peak distribution and unfiltered ADC peak distribution of the channel
-        auto canvas_unfiltered = new TCanvas(("canvas_unfiltered_channel_" + std::to_string(_channel)).c_str(), ("Unfiltered ADC Peak Distribution for Channel " + std::to_string(_channel)).c_str(), 1000, 600);
+        auto canvas_unfiltered = new TCanvas(("canvas_unfiltered_channel_" + std::to_string(_display_channel)).c_str(), ("Unfiltered ADC Peak Distribution for Channel " + std::to_string(_display_channel)).c_str(), 1000, 600);
 
         TLegend* legend = new TLegend(0.6, 0.7, 0.89, 0.89);
         legend->SetFillStyle(0);
@@ -530,7 +818,7 @@ int main(int argc, char **argv) {
         auto h1d_filtered = h1d_adc_peak_limited_toa_filtered_minus_pedestal_channel_list[_channel];
         h1d_unfiltered->SetStats(kFALSE);
         h1d_unfiltered->SetTitle("");
-        format_1d_hist_canvas(canvas_unfiltered, h1d_unfiltered, kBlue+2, "Laser Test with H2GCROC", "Raw ADC Peak Distribution", ("Channel " + std::to_string(_channel)).c_str());
+        format_1d_hist_canvas(canvas_unfiltered, h1d_unfiltered, kBlue+2, "Laser Test with H2GCROC", "Raw ADC Peak Distribution", ("Channel " + std::to_string(_display_channel)).c_str());
         h1d_filtered->SetLineColor(kRed+2);
         h1d_filtered->SetLineWidth(2);
         h1d_filtered->Draw("hist same");
@@ -541,14 +829,15 @@ int main(int argc, char **argv) {
         canvas_unfiltered->Update();
         canvas_unfiltered->Write();
         // save as a seprate pdf file
-        canvas_unfiltered->SaveAs((opts.output_file + "_unfiltered_channel_" + std::to_string(_channel) + ".pdf").c_str());
+        canvas_unfiltered->SaveAs((opts.output_file + "_unfiltered_channel_" + std::to_string(_display_channel) + ".pdf").c_str());
         canvas_unfiltered->Close();
 
         double valid_toa_ratio = channel_valid_toa_count_list[_channel] / processed_entries;
         if (valid_toa_ratio >= threshold_toa_ratio_valid) {
-            LOG(INFO) << "Channel " << _channel << " has valid ToA ratio " << valid_toa_ratio * 100 << "%, which is above the threshold " << threshold_toa_ratio_valid * 100 << "%, so it will be included in the ToA filtered ADC peak analysis";
+            LOG(INFO) << "Channel " << _display_channel << " has valid ToA ratio " << valid_toa_ratio * 100 << "%, which is above the threshold " << threshold_toa_ratio_valid * 100 << "%, so it will be included in the ToA filtered ADC peak analysis";
             auto& th2d_shifted_waveform = h2d_toa_shifted_adc_waveform_channel_list[_channel];
-            auto sliding_result = FindBestXWindowByYMean(th2d_shifted_waveform, sliding_x_window_bins, sliding_x_window_step_bins);
+            auto& th2d_shifted_adc_signal_waveform = h2d_toa_shifted_adc_signal_waveform_channel_list[_channel];
+            auto sliding_result = FindBestXWindowByYMean(th2d_shifted_adc_signal_waveform, sliding_x_window_bins, sliding_x_window_step_bins);
             double toa_window_min = sliding_result.xmin;
             double toa_window_max = sliding_result.xmax;
 
@@ -556,7 +845,7 @@ int main(int argc, char **argv) {
             
             if (sliding_result.xbin1 != -1 && sliding_result.hY) {
                 // save the sliding result histogram
-                auto canvas_sliding = new TCanvas(("canvas_sliding_channel_" + std::to_string(_channel)).c_str(), ("Finding the Best ToA Window by Sliding for Channel " + std::to_string(_channel)).c_str(), 800, 600);
+                auto canvas_sliding = new TCanvas(("canvas_sliding_channel_" + std::to_string(_display_channel)).c_str(), ("Finding the Best ToA Window by Sliding for Channel " + std::to_string(_display_channel)).c_str(), 800, 600);
                 canvas_sliding->SetLeftMargin(0.12);
                 canvas_sliding->SetBottomMargin(0.12);
                 canvas_sliding->SetRightMargin(0.05);
@@ -568,7 +857,7 @@ int main(int argc, char **argv) {
 
                 // Set histogram properties
                 sliding_result.hY->SetStats(kFALSE);
-                sliding_result.hY->SetTitle(("ADC Distribution in Best ToA Window for Channel " + std::to_string(_channel) + ";ADC;Count").c_str());
+                sliding_result.hY->SetTitle(("ADC Distribution in Best ToA Window for Channel " + std::to_string(_display_channel) + ";ADC;Count").c_str());
                 sliding_result.hY->Draw("hist");
                 
                 // Set axis properties after drawing
@@ -591,7 +880,7 @@ int main(int argc, char **argv) {
                     // Saturation detected
                     fit_mean = 1023.0;
                     fit_sigma = 1.0 / sqrt(12.0); // assuming uniform distribution between 1023 and 1024 for the saturated bin
-                    LOG(WARNING) << "Channel " << _channel << " shows saturation (last bin has " << last_bin_fraction * 100 << "% of counts). Assigning mean=1023, sigma=" << fit_sigma << " and skipping Gaussian fit.";
+                    LOG(WARNING) << "Channel " << _display_channel << " shows saturation (last bin has " << last_bin_fraction * 100 << "% of counts). Assigning mean=1023, sigma=" << fit_sigma << " and skipping Gaussian fit.";
                     // Create dummy TF1 with fixed parameters and use Fit with N option (no actual fit, just store)
                     TF1* dummy_fit = new TF1("fit_func", "gaus", 0, 1023);
                     dummy_fit->AddToGlobalList(false);
@@ -631,7 +920,7 @@ int main(int argc, char **argv) {
                         double last_bin_low_edge = sliding_result.hY->GetXaxis()->GetBinLowEdge(last_bin);
                         if (prefit_range_max > last_bin_low_edge) {
                             prefit_range_max = last_bin_low_edge;
-                            LOG(INFO) << "Channel " << _channel << " has " << last_bin_fraction * 100 << "% in last bin. Excluding last bin from fit (max range: " << prefit_range_max << ")";
+                            LOG(INFO) << "Channel " << _display_channel << " has " << last_bin_fraction * 100 << "% in last bin. Excluding last bin from fit (max range: " << prefit_range_max << ")";
                         }
                     }
                     
@@ -672,16 +961,16 @@ int main(int argc, char **argv) {
                 // Don't close canvas explicitly - let ROOT handle cleanup when file closes
                 // canvas_sliding->Close();
                 
-                LOG(INFO) << "For channel " << _channel << ", the best ToA window is [" << sliding_result.xmin << ", " << sliding_result.xmax << "] ns with mean ADC " << sliding_result.meanY << ", Gaussian fit mean = " << fit_mean << " ADC, sigma = " << fit_sigma << " ADC";
+                LOG(INFO) << "For channel " << _display_channel << ", the best ToA window is [" << sliding_result.xmin << ", " << sliding_result.xmax << "] ns with mean ADC " << sliding_result.meanY << ", Gaussian fit mean = " << fit_mean << " ADC, sigma = " << fit_sigma << " ADC";
 
             } else {
-                LOG(WARNING) << "Failed to find a valid ToA window for channel " << _channel;
+                LOG(WARNING) << "Failed to find a valid ToA window for channel " << _display_channel;
             }
 
 
-            LOG(INFO) << "For channel " << _channel << ", the best ToA window is [" << toa_window_min << ", " << toa_window_max << "] ns with mean ADC " << sliding_result.meanY;
+            LOG(INFO) << "For channel " << _display_channel << ", the best ToA window is [" << toa_window_min << ", " << toa_window_max << "] ns with mean ADC " << sliding_result.meanY;
             // draw the 2d histogram of the waveform and highlight the best ToA window
-            auto canvas_waveform = new TCanvas(("canvas_waveform_channel_" + std::to_string(_channel)).c_str(), ("ToA Shifted ADC Waveform for Channel " + std::to_string(_channel)).c_str(), 1000, 600);
+            auto canvas_waveform = new TCanvas(("canvas_waveform_channel_" + std::to_string(_display_channel)).c_str(), ("ToA Shifted ADC Waveform for Channel " + std::to_string(_display_channel)).c_str(), 1000, 600);
             canvas_waveform->SetLeftMargin(0.12);
             canvas_waveform->SetBottomMargin(0.12);
             canvas_waveform->SetRightMargin(0.15);
@@ -738,7 +1027,7 @@ int main(int argc, char **argv) {
             latex.DrawLatex(x_text, y_start, "Laser Test with H2GCROC");
             latex.SetTextSize(0.03);
             latex.SetTextFont(42);
-            latex.DrawLatex(x_text, y_start - y_step, ("ADC Waveform Shifted by ToA for Channel " + std::to_string(_channel)).c_str());
+            latex.DrawLatex(x_text, y_start - y_step, ("ADC Waveform Shifted by ToA for Channel " + std::to_string(_display_channel)).c_str());
             latex.DrawLatex(x_text, y_start - 2 * y_step, ("Best ToA Window: [" + std::to_string(std::round(toa_window_min * 1000) / 1000).substr(0, 5) + ", " + std::to_string(std::round(toa_window_max * 1000) / 1000).substr(0, 5) + "] ns").c_str());
             latex.DrawLatex(x_text, y_start - 3 * y_step, "CERN, February 2026");
             
@@ -746,19 +1035,19 @@ int main(int argc, char **argv) {
             canvas_waveform->Update();
             canvas_waveform->Write();
             // save as a separte pdf file
-            canvas_waveform->SaveAs((opts.output_file + "_channel_" + std::to_string(_channel) + "_toa_shifted_waveform.pdf").c_str());
+            canvas_waveform->SaveAs((opts.output_file + "_channel_" + std::to_string(_display_channel) + "_toa_shifted_waveform.pdf").c_str());
             // Don't close canvas explicitly - let ROOT handle cleanup when file closes
             // canvas_waveform->Close();
 
         } else {
-            LOG(INFO) << "Channel " << _channel << " has valid ToA ratio " << valid_toa_ratio * 100 << "%, which is below the threshold " << threshold_toa_ratio_valid * 100 << "%, so it will NOT be included in the ToA filtered ADC peak analysis"; 
+            LOG(INFO) << "Channel " << _display_channel << " has valid ToA ratio " << valid_toa_ratio * 100 << "%, which is below the threshold " << threshold_toa_ratio_valid * 100 << "%, so it will NOT be included in the ToA filtered ADC peak analysis"; 
             auto& channel_adc_peak_list = channel_adc_peak_sample_values_list[_channel];
             std::sort(channel_adc_peak_list.begin(), channel_adc_peak_list.end());
-            auto canvas_peak = new TCanvas(("canvas_peak_channel_" + std::to_string(_channel)).c_str(), ("ADC Peak (Limited to Sample Index " + std::to_string(peak_index_max) + ") Distribution for Channel " + std::to_string(_channel)).c_str(), 800, 600);
+            auto canvas_peak = new TCanvas(("canvas_peak_channel_" + std::to_string(_display_channel)).c_str(), ("ADC Peak (Limited to Sample Index " + std::to_string(peak_index_max) + ") Distribution for Channel " + std::to_string(_display_channel)).c_str(), 800, 600);
             TLegend* legend_sample = new TLegend(0.6, 0.7, 0.89, 0.89);
             legend_sample->SetFillStyle(0);
             legend_sample->SetBorderSize(0);
-            auto* h1d_peak = new TH1D(("h1d_peak_channel_" + std::to_string(_channel)).c_str(), ("ADC Peak (Limited to Sample Index " + std::to_string(peak_index_max) + ") Distribution for Channel " + std::to_string(_channel) + ";ADC Peak;Count").c_str(), adc_hist_bins, adc_hist_min, adc_hist_max);
+            auto* h1d_peak = new TH1D(("h1d_peak_channel_" + std::to_string(_display_channel)).c_str(), ("ADC Peak (Limited to Sample Index " + std::to_string(peak_index_max) + ") Distribution for Channel " + std::to_string(_display_channel) + ";ADC Peak;Count").c_str(), adc_hist_bins, adc_hist_min, adc_hist_max);
             int start_index = static_cast<int>(channel_adc_peak_list.size() * 0.9);
             for (size_t i = start_index; i < channel_adc_peak_list.size(); i++) {
                 h1d_peak->Fill(channel_adc_peak_list[i]);
@@ -772,14 +1061,14 @@ int main(int argc, char **argv) {
             double last_bin_content = h1d_peak->GetBinContent(last_bin);
             double total_entries = h1d_peak->GetEntries();
             double last_bin_fraction = last_bin_content / total_entries;
-            LOG(INFO) << "Channel " << _channel << ": last bin content = " << last_bin_content << ", total entries = " << total_entries << ", last bin fraction = " << last_bin_fraction * 100 << "%";
+            LOG(INFO) << "Channel " << _display_channel << ": last bin content = " << last_bin_content << ", total entries = " << total_entries << ", last bin fraction = " << last_bin_fraction * 100 << "%";
             
             double fit_mean, fit_sigma;
             if (last_bin_fraction > saturation_threshold) {
                 // Saturation detected
                 fit_mean = 1023.0;
                 fit_sigma = 1.0 / sqrt(12.0); // assuming uniform distribution between 1023 and 1024 for the saturated bin
-                LOG(WARNING) << "Channel " << _channel << " shows saturation (last bin has " << last_bin_fraction * 100 << "% of counts). Assigning mean=1023, sigma=" << fit_sigma << " and skipping Gaussian fit. ";
+                LOG(WARNING) << "Channel " << _display_channel << " shows saturation (last bin has " << last_bin_fraction * 100 << "% of counts). Assigning mean=1023, sigma=" << fit_sigma << " and skipping Gaussian fit. ";
                 // Create dummy TF1 with fixed parameters and use Fit with N option (no actual fit, just store)
                 TF1* dummy_fit = new TF1("fit_func", "gaus", 0, 1023);
                 dummy_fit->AddToGlobalList(false);
@@ -822,7 +1111,7 @@ int main(int argc, char **argv) {
                     double last_bin_low_edge = h1d_peak->GetXaxis()->GetBinLowEdge(last_bin);
                     if (prefit_range_max > last_bin_low_edge) {
                         prefit_range_max = last_bin_low_edge;
-                        LOG(INFO) << "Channel " << _channel << " has " << last_bin_fraction * 100 << "% in last bin. Excluding last bin from fit (max range: " << prefit_range_max << ")";
+                        LOG(INFO) << "Channel " << _display_channel << " has " << last_bin_fraction * 100 << "% in last bin. Excluding last bin from fit (max range: " << prefit_range_max << ")";
                     }
                 }
                 
@@ -865,14 +1154,15 @@ int main(int argc, char **argv) {
 
     // save the average adc minus pedestal for each channel of the interested channels as TCanvas in the same directory
     for (int _channel : interested_channels) {
+        const int _display_channel = _channel;
         if (_channel < 0 || _channel >= FPGA_CHANNEL_NUMBER * fpga_count) {
-            LOG(WARNING) << "Interested but covered channel " << _channel << " is out of range, skipping";
+            LOG(WARNING) << "Interested channel " << _display_channel << " is out of range, skipping";
             continue;
         }
-        auto canvas_average = new TCanvas(("canvas_average_channel_" + std::to_string(_channel)).c_str(), ("ADC Average Minus Pedestal Distribution for Channel " + std::to_string(_channel)).c_str(), 800, 600);
+        auto canvas_average = new TCanvas(("canvas_average_channel_" + std::to_string(_display_channel)).c_str(), ("ADC Average Minus Pedestal Distribution for Channel " + std::to_string(_display_channel)).c_str(), 800, 600);
         auto h1d_average = h1d_adc_average_channel_list[_channel];
         h1d_average->SetStats(kFALSE);
-        h1d_average->SetTitle(("ADC Average Minus Pedestal Distribution for Channel " + std::to_string(_channel) + ";ADC Average - Pedestal;Count").c_str());
+        h1d_average->SetTitle(("ADC Average Minus Pedestal Distribution for Channel " + std::to_string(_display_channel) + ";ADC Average - Pedestal;Count").c_str());
         h1d_average->Draw("hist");
         canvas_average->Modified();
         canvas_average->Update();

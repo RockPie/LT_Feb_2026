@@ -88,12 +88,16 @@ Each `config/scan_number_*.json` file defines one laser-intensity scan. It conta
 	"scan_CC": 4,
 	"scan_Cf": 10,
 	"scan_Cfcomp": 10,
+	"example_channels": [50, 52],
 	"run_numbers": [299, 300],
 	"laser_intensities": [10.0, 9.8]
 }
 ```
 
 The `run_numbers` and `laser_intensities` arrays must have the same ordering. Run the single-run analyses for every listed run before creating a scan.
+The optional `example_channels` array selects the channels included by the ADC
+and ToT scan programs. When it is absent, the scan programs inherit the
+channels available in the single-run ADC and ToT analysis outputs.
 
 ```bash
 build/402_ADC_Scan -f config/scan_number_0.json -o dump/402_ADC_Scan/Scan0.root
@@ -171,6 +175,48 @@ snakemake --snakefile workflow/snakefile --cores 8 --printshellcmds \
 	dump/403_Laser_Scan/LaserScan0.root
 ```
 
+Raw files in `data/LT_Sep_2026/` use isolated September outputs and logs. The workflow discovers every `Run*.h2g` file in that directory, runs `103_Rootifier_10G`, `101_EventRecon`, and `102_EventMatch`, then runs the same per-run analyses as regular data: `303_ADC_Analysis`, `401_ADC_Analysis`, `404_ToT_Analysis`, and `406_ADC_ToT_Combine`.
+
+```bash
+# Process a single September run through matching and the standard ADC analysis.
+snakemake --snakefile workflow/snakefile --cores 8 --printshellcmds \
+	dump/303_ADC_Analysis/LT_Sep_2026/Run410.root
+
+# Process every detected September raw run through conversion and all per-run analyses.
+snakemake --snakefile workflow/snakefile --cores 8 --printshellcmds \
+	--resources mem_mb=8000 --rerun-incomplete dump/LT_Sep_2026/all.done
+
+# Produce the ADC and ToT scans for the runs listed in the September config.
+snakemake --snakefile workflow/snakefile --cores 8 --printshellcmds \
+	--resources mem_mb=8000 --rerun-incomplete \
+	dump/LT_Sep_2026/Scan0.done
+
+# Process every config/LT_Sep_2026_scan_number_*.json file.
+snakemake --snakefile workflow/snakefile --cores 8 --printshellcmds \
+	--resources mem_mb=8000 --rerun-incomplete \
+	dump/LT_Sep_2026/all_scans.done
+```
+
+The September scan target reads `config/LT_Sep_2026_scan_number_N.json` and
+expands its `run_numbers` list. It writes the ADC scan to
+`dump/402_ADC_Scan/LT_Sep_2026/ScanN.root` and the ToT scan to
+`dump/405_ToT_Scan/LT_Sep_2026/ToTScanN.root`. Target
+`dump/LT_Sep_2026/ScanN.done` also runs matching, both ADC analyses, and ToT
+analysis for the configured runs. The
+`all_scans.done` target discovers all matching September scan configurations
+when Snakemake starts and builds every corresponding `ScanN.done` target. The
+`all.done` target remains directory-based and processes every valid raw run
+found under `data/LT_Sep_2026/`.
+
+Both `401_ADC_Analysis` rules reserve `mem_mb=2000` per job. Supply a global
+`--resources mem_mb=8000` budget to limit these jobs to four at a time; keep
+reservation alone does not limit concurrency. Full September runs measured
+about 3 GiB peak RAM per process, with additional headroom reserved for ROOT
+buffers and larger inputs. This is a scheduling estimate, not an OS memory
+limit. Other analysis rules do not yet declare memory reservations, so keep
+`--cores` conservative and leave RAM available for those jobs and the system.
+Use `--cores 1` for a sequential recovery when memory is constrained.
+
 Replace `087` or `0` with the intended run or scan number. A numbered scan target expands the `run_numbers` list in its JSON configuration, so it can trigger conversion and analysis of every listed raw run. `Laser_Scan` only expands dependencies when its configuration has `"scan_data": "ADC"`; the current workflow does not define a Snakemake rule for `407_ToT_Laser_Scan`.
 
 For a stopped or partially completed workflow, first review the planned jobs and then resume incomplete outputs:
@@ -187,6 +233,17 @@ If Snakemake reports a stale lock after confirming that no other workflow is run
 ```bash
 snakemake --snakefile workflow/snakefile --unlock
 ```
+
+To remove all generated analysis products and logs, including per-channel PDFs,
+scan PDFs, ROOT files, LUT text files, and September completion markers, run:
+
+```bash
+snakemake --snakefile workflow/snakefile --cores 1 clean_analysis
+```
+
+The `clean_analysis` rule removes outputs corresponding to scripts `303` and
+`400` through `499`. It preserves all conversion, reconstruction, and matching
+outputs and logs from stages `101`, `102`, and `103`.
 
 ### Outputs and logs
 

@@ -205,8 +205,33 @@ int main(int argc, char **argv){
             entry_matched.erase(entry_matched.begin(), entry_matched.begin() + SWMA_core_size);
         }
     }
-    machine_gun_samples = 20;
-    LOG(INFO) << "Machine gun samples (forced): " << machine_gun_samples;
+    for (int _pool_index = 0; _pool_index < static_cast<int>(timestamp_pool.size()); _pool_index++) {
+        if (entry_matched[_pool_index]) {
+            continue;
+        }
+        auto _timestamp_seed = timestamp_pool[_pool_index];
+        auto _fpga_id_seed = fpga_id_pool[_pool_index];
+        int _matched_count = 1;
+        for (int _match_search_index = _pool_index + 1; _match_search_index < static_cast<int>(timestamp_pool.size()); _match_search_index++) {
+            if (entry_matched[_match_search_index]) {
+                continue;
+            }
+            uint32_t diff = (timestamp_pool[_match_search_index] > _timestamp_seed) ? (timestamp_pool[_match_search_index] - _timestamp_seed) : (_timestamp_seed - timestamp_pool[_match_search_index]);
+            if (diff > (UINT32_MAX / 2)) {
+                diff = UINT32_MAX - diff;
+            }
+            if (diff < SWMA_threshold && fpga_id_pool[_match_search_index] == _fpga_id_seed) {
+                _matched_count++;
+                entry_matched[_match_search_index] = true;
+            }
+        }
+        machine_gun_samples = std::max(machine_gun_samples, _matched_count);
+    }
+    if (machine_gun_samples == 0) {
+        LOG(ERROR) << "Failed to determine machine gun samples from input timestamps";
+        return 1;
+    }
+    LOG(INFO) << "Machine gun samples (detected): " << machine_gun_samples;
 
     // * --- Create output file ---------------------------------------------------------
     // * --------------------------------------------------------------------------------
@@ -356,27 +381,27 @@ int main(int argc, char **argv){
                     bad_machine_gun_events++;
                 }
             }
-            // delete the core size
-            fpga_id_pool.erase(fpga_id_pool.begin(), fpga_id_pool.begin() + SWMA_core_size);
-            timestamp_pool.erase(timestamp_pool.begin(), timestamp_pool.begin() + SWMA_core_size);
-            for (int _pool_index = 0; _pool_index < SWMA_core_size; _pool_index++) {
-                delete daqh_list_pool[_pool_index];
-                delete tc_list_pool[_pool_index];
-                delete tp_list_pool[_pool_index];
-                delete val0_list_pool[_pool_index];
-                delete val1_list_pool[_pool_index];
-                delete val2_list_pool[_pool_index];
-                delete crc32_list_pool[_pool_index];
+            const int entries_to_remove = flag_last_entry ? fpga_id_pool.size() : SWMA_core_size;
+            fpga_id_pool.erase(fpga_id_pool.begin(), fpga_id_pool.begin() + entries_to_remove);
+            timestamp_pool.erase(timestamp_pool.begin(), timestamp_pool.begin() + entries_to_remove);
+            for (int _pool_index = 0; _pool_index < entries_to_remove; _pool_index++) {
+                delete[] daqh_list_pool[_pool_index];
+                delete[] tc_list_pool[_pool_index];
+                delete[] tp_list_pool[_pool_index];
+                delete[] val0_list_pool[_pool_index];
+                delete[] val1_list_pool[_pool_index];
+                delete[] val2_list_pool[_pool_index];
+                delete[] crc32_list_pool[_pool_index];
             }
-            daqh_list_pool.erase(daqh_list_pool.begin(), daqh_list_pool.begin() + SWMA_core_size);
-            tc_list_pool.erase(tc_list_pool.begin(), tc_list_pool.begin() + SWMA_core_size);
-            tp_list_pool.erase(tp_list_pool.begin(), tp_list_pool.begin() + SWMA_core_size);
-            val0_list_pool.erase(val0_list_pool.begin(), val0_list_pool.begin() + SWMA_core_size);
-            val1_list_pool.erase(val1_list_pool.begin(), val1_list_pool.begin() + SWMA_core_size);
-            val2_list_pool.erase(val2_list_pool.begin(), val2_list_pool.begin() + SWMA_core_size);
-            crc32_list_pool.erase(crc32_list_pool.begin(), crc32_list_pool.begin() + SWMA_core_size);
-            last_heartbeat_pool.erase(last_heartbeat_pool.begin(), last_heartbeat_pool.begin() + SWMA_core_size);
-            entry_matched.erase(entry_matched.begin(), entry_matched.begin() + SWMA_core_size);
+            daqh_list_pool.erase(daqh_list_pool.begin(), daqh_list_pool.begin() + entries_to_remove);
+            tc_list_pool.erase(tc_list_pool.begin(), tc_list_pool.begin() + entries_to_remove);
+            tp_list_pool.erase(tp_list_pool.begin(), tp_list_pool.begin() + entries_to_remove);
+            val0_list_pool.erase(val0_list_pool.begin(), val0_list_pool.begin() + entries_to_remove);
+            val1_list_pool.erase(val1_list_pool.begin(), val1_list_pool.begin() + entries_to_remove);
+            val2_list_pool.erase(val2_list_pool.begin(), val2_list_pool.begin() + entries_to_remove);
+            crc32_list_pool.erase(crc32_list_pool.begin(), crc32_list_pool.begin() + entries_to_remove);
+            last_heartbeat_pool.erase(last_heartbeat_pool.begin(), last_heartbeat_pool.begin() + entries_to_remove);
+            entry_matched.erase(entry_matched.begin(), entry_matched.begin() + entries_to_remove);
         }
     }
     double machine_gun_all_events = entries_to_process / (double) machine_gun_samples;
